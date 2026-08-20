@@ -328,27 +328,40 @@ first trustworthy C0-vs-C-lambda data with correct derivative + robust semantics
 
 ## 7h. Round 8 (FlatSurfacesS photometric-effectiveness validation)
 
-**BLOCKED: the FlatSurfacesS dataset is not available locally.** The GEODE bag
-directory (/home/lc/algorithm_versa/bag/GEODE/) contains only
-Shield_tunnel1/4/5 and Tunneling_tunnel1/2 gamma bags; no Flat_Surfaces_Smooth
-bag, no FlatSurfacesS GT, and no GEODE official rmse.py. evo v1.31.1 (evo_ape)
-is available for the APE evaluation once the bag + GT are provided.
+**Dataset obtained and experiment run.** The FlatSurfacesS bag + GT were
+provided (results/flatsurfaces_round8/): bag
+/home/lc/algorithm_versa/bag/ENWIDE/flat_surfaces_smooth.bag (82 s, 821 Livox
+Avia frames, /livox/lidar + /livox/imu), GT flat_surfaces_smooth.txt (23315
+TUM poses, aligned time range). evo v1.31.1 used for APE (evo_ape tum -a,
+trans_part, t_max_diff 0.1, offset 0, no offset search).
 
-Round-8 preparatory work (committed):
-- Per-frame photometric diagnostics now expose near-range (< 1.5 m) photo match
-  statistics (fraction + residual P50/P90 split by range) and the geometry weak
-  eigenvalues lambda1<=lambda2<=lambda3 with the two-weak-direction flag
-  (10*lambda1 > lambda2), for interpreting a future FlatSurfacesS run.
-- scripts/run_flatsurfaces_round8.sh runs the four fixed groups (B0 true-BIEVR,
-  C0 photo OFF, L1=0.001, L2=0.003) on the FULL bag from t0, with explicit
-  guards (no mid-sequence crop, no lambda sweep, no preprocessing tuning).
-- scripts/analyze_flatsurfaces_round8.py aggregates coverage / stability /
-  divergence onset and (with GT + evo_ape) APE using evo_ape tum with the GEODE
-  semantics.
+Four groups run from t0 (IMU init OK: acc ~9.75 g, gyro mean 0.77 deg/s):
 
-The four-group experiment and the photometric-effectiveness classification are
-deferred until the FlatSurfacesS (Flat_Surfaces_Smooth, Avia/gamma) bag and its
-GT are provided.
+| group | coverage | path(m) | APE RMSE | APE mean | APE max | t>1m | t>2m | class |
+|---|---|---|---|---|---|---|---|---|
+| B0 (BIEVR) | 99.5% | 67.7 | 1.52 | 1.37 | 3.48 | 24.5s | 30.8s | STABLE_BUT_POOR (geometry drift) |
+| C0 (COIN/photo OFF) | 99.4% | 67.2 | 1.65 | 1.54 | 3.21 | 0s | 16.5s | STABLE_BUT_POOR |
+| L1 (0.001) | 99.4% | 5542 | 821.9 | 537.8 | 3617 | - | - | FAIL (diverged) |
+| L2 (0.003) | 99.4% | 10144 | 2232 | 1829 | 6519 | - | - | FAIL (diverged) |
+
+FlatSurfacesS is confirmed geometry-degenerate: 79% of frames have the
+two-weak-direction flag (10*lambda1 > lambda2); geometry lambda1 median ~0.9.
+
+**Key result: the photometric residual does NOT rescue FlatSurfacesS in the
+current implementation - it causes catastrophic divergence.** The intensity
+sampling works (600-1100 photo matches/frame, residual P50 30-40), but the
+direct robustified photo Hessian is far too strong relative to the degenerate
+geometry Hessian (L1 R_H median 0.48, L2 R_H median 2.45 - vs Shield1's 0.028 /
+0.18), so the photometric term dominates and drives the pose away. Near-range
+(<1.5 m) photo matches are essentially absent (fraction ~0), so the Avia
+near-range artifact is not the cause. L1 begins to leave the bounded envelope
+~40-50 s in (after the 10 s photometric warmup).
+
+Per round-8 rules this is reported, not fixed: no lambda tuning, no window
+tuning, no preprocessing changes, no FlatSurfacesS re-runs. The likely causes
+(the photo Hessian authority vs the degenerate geometry, Eq.8/eta selection, or
+intensity-map consistency under a drifting geometry pose) are for the
+coordinator to adjudicate.
 
 ## 3. Per-commit Changed Files
 
