@@ -69,6 +69,21 @@ int main() {
   bievr::LsqRegistration opt_shadow(map, cloud, cloud, inten_200, reg_shadow);
   const bievr::Transform pose_shadow = opt_shadow.computeTransformation(bievr::Transform::Identity());
 
+  // Round-7: enabling the robust shadow lambda scan must also not change the
+  // pose (the 9-lambda direct robustified evaluation never merges).
+  bievr::RegistrationConfig reg_scan;
+  reg_scan.photometric_residual = false;
+  reg_scan.shadow_photometric = true;
+  reg_scan.shadow_lambda_scan = true;
+  bievr::LsqRegistration opt_scan(map, cloud, cloud, inten_200, reg_scan);
+  const bievr::Transform pose_scan = opt_scan.computeTransformation(bievr::Transform::Identity());
+  if ((pose_scan.translation() - pose_geo.translation()).norm() > 1e-9) {
+    return fail("robust shadow scan changed the pose");
+  }
+  if (opt_scan.robustShadowScan().size() != 9) {
+    return fail("robust shadow scan did not produce the full lambda grid");
+  }
+
   // Shadow must not change the pose (geometry-only solve in both cases).
   if ((pose_shadow.translation() - pose_geo.translation()).norm() > 1e-9) {
     return fail("shadow mode changed the pose");
