@@ -2,6 +2,7 @@
 #define BIEVR_LIO_INTENSITY_PROCESSOR_H_
 
 #include <Eigen/Core>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -73,6 +74,10 @@ struct IntensityProcessingResult {
   // Index-aligned filtered intensity (one value per input point).
   Intensities filtered;
 
+  // Input point count (kept separate from `filtered` because the pipeline may
+  // std::move() `filtered` out of this struct before reading the diagnostics).
+  size_t input_points = 0;
+
   // Original point -> normalization image pixel (linear index v*width+u).
   // -1 means the point could not be projected (defensive; with the clamped
   // spherical projection every finite point is expected to be valid).
@@ -92,6 +97,19 @@ struct IntensityProcessingResult {
   double filtered_min = 0.0;                // min / max / mean of the filtered values
   double filtered_max = 0.0;
   double filtered_mean = 0.0;
+  // Filtered intensity distribution (256-bin histogram over [0,255], computed
+  // during back-assignment; light, no sorting).
+  double filtered_std = 0.0;
+  double filtered_p01 = 0.0, filtered_p05 = 0.0, filtered_p50 = 0.0;
+  double filtered_p95 = 0.0, filtered_p99 = 0.0;
+  size_t filtered_sat0 = 0;    // points with filtered value == 0
+  size_t filtered_sat255 = 0;  // points with filtered value >= 255
+  std::array<int, 256> filtered_histogram{};  // 256 bins over [0, 256)
+  // Raw intensity distribution (Livox reflectivity is 0..255).
+  double raw_min = 0.0, raw_max = 0.0, raw_p50 = 0.0, raw_p95 = 0.0, raw_p99 = 0.0;
+  // Observed elevation distribution (deg), arcsin(z/|p|); 720-bin histogram.
+  double elevation_min_deg = 0.0, elevation_max_deg = 0.0;
+  double elevation_p01_deg = 0.0, elevation_p99_deg = 0.0;
 };
 
 // Produces per-point filtered intensities from a LiDAR-frame point cloud.

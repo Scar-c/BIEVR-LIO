@@ -12,6 +12,49 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
+// Lightweight fixed-bin histogram used for per-frame distribution statistics
+// (no sorting, O(N) increments). Values are clamped into [lo, hi).
+class SimpleHistogram {
+ public:
+  SimpleHistogram(int num_bins, double lo, double hi)
+      : bins_(num_bins, 0), lo_(lo), hi_(hi), total_(0) {}
+
+  void add(double v) {
+    if (!std::isfinite(v)) return;
+    double t = (v - lo_) / (hi_ - lo_) * static_cast<double>(bins_.size());
+    int idx = static_cast<int>(t);
+    if (idx < 0) idx = 0;
+    if (idx >= static_cast<int>(bins_.size())) idx = static_cast<int>(bins_.size()) - 1;
+    ++bins_[idx];
+    ++total_;
+  }
+
+  // Quantile in [0,100]; returns the bin-center value of the reaching bin.
+  double percentile(double q) const {
+    if (total_ == 0) return 0.0;
+    const double target = q / 100.0 * static_cast<double>(total_);
+    int64_t acc = 0;
+    for (size_t i = 0; i < bins_.size(); ++i) {
+      acc += bins_[i];
+      if (acc >= target) {
+        return lo_ + (static_cast<double>(i) + 0.5) / static_cast<double>(bins_.size()) *
+                         (hi_ - lo_);
+      }
+    }
+    return hi_;
+  }
+
+  int64_t bin(size_t i) const { return i < bins_.size() ? bins_[i] : 0; }
+  int64_t total() const { return total_; }
+
+ private:
+  std::vector<int> bins_;
+  double lo_, hi_;
+  int64_t total_;
+};
+
+}  // namespace
+
 // 1D clamped box average along the rows/cols via prefix sums. `values` holds
 // the per-pixel signal and `mask` its validity; returns the per-pixel average
 // of `values` over the box window, counting only valid pixels (0 where none).
@@ -48,8 +91,6 @@ Eigen::MatrixXd maskedBoxAverage(const Eigen::MatrixXf& values, const Eigen::Mat
   }
   return brightness;
 }
-
-}  // namespace
 
 IntensityProcessor::IntensityProcessor(const IntensityProcessorConfig& config) : config_(config) {}
 
@@ -220,6 +261,7 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
                                                       const IntensityView& raw_intensity) {
   IntensityProcessingResult out;
   const size_t N = points_L.size();
+  out.input_points = N;
   out.filtered.resize(1, N);
   out.point_pixel_idx.assign(N, -1);
   out.num_valid = 0;
@@ -237,9 +279,12 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
   // index alignment but skips brightness normalization.
   // -------------------------------------------------------------------
   if (!config_.enabled) {
-    double sum = 0.0;
+    double sum = 0.0, sum_sq = 0.0;
+    SimpleHistogram fhist(256, 0, 256);
     out.filtered_min = std::numeric_limits<double>::max();
     out.filtered_max = std::numeric_limits<double>::lowest();
+    out.raw_min = std::numeric_limits<double>::max();
+    out.raw_max = std::numeric_limits<double>::lowest();
     for (size_t i = 0; i < N; ++i) {
       double v = raw_intensity.size() > i ? raw_intensity(0, i) * config_.raw_intensity_scale
                                           : 0.0;
@@ -247,11 +292,32 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
       v = std::max(0.0, std::min(255.0, v));  // clamp
       out.filtered(0, i) = static_cast<float>(v);
       sum += v;
+      sum_sq += v * v;
       out.filtered_min = std::min(out.filtered_min, v);
       out.filtered_max = std::max(out.filtered_max, v);
+      out.raw_min = std::min(out.raw_min, v);
+      out.raw_max = std::max(out.raw_max, v);
+      fhist.add(v);
     }
     out.num_valid = N;
     out.filtered_mean = sum / static_cast<double>(N);
+    out.filtered_std = std::sqrt(std::max(0.0, sum_sq / static_cast<double>(N) -
+                                                   out.filtered_mean * out.filtered_mean));
+    out.filtered_p01 = fhist.percentile(1.0);
+    out.filtered_p05 = fhist.percentile(5.0);
+    out.filtered_p50 = fhist.percentile(50.0);
+    out.filtered_p95 = fhist.percentile(95.0);
+    out.filtered_p99 = fhist.percentile(99.0);
+    for (size_t i = 0; i < out.filtered_histogram.size(); ++i) {
+      out.filtered_histogram[i] = fhist.bin(i);
+      if (i == 0) out.filtered_sat0 = static_cast<size_t>(fhist.bin(i));
+      if (i + 1 >= out.filtered_histogram.size()) {
+        out.filtered_sat255 = static_cast<size_t>(fhist.bin(i));
+      }
+    }
+    out.raw_p50 = out.filtered_p50;
+    out.raw_p95 = out.filtered_p95;
+    out.raw_p99 = out.filtered_p99;
     return out;
   }
 
@@ -269,7 +335,31 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
       config_.image_height, config_.image_width);
   const int W = config_.image_width;
 
+  // Per-frame distribution diagnostics (light, O(N)).
+  SimpleHistogram raw_hist(256, 0, 256);   // Livox reflectivity 0..255
+  SimpleHistogram elev_hist(720, -90, 90); // 0.25 deg bins
+  out.raw_min = std::numeric_limits<double>::max();
+  out.raw_max = std::numeric_limits<double>::lowest();
+  out.elevation_min_deg = std::numeric_limits<double>::max();
+  out.elevation_max_deg = std::numeric_limits<double>::lowest();
+  const double kRad2Deg = 180.0 / kPi;
+
   for (size_t i = 0; i < N; ++i) {
+    const double r = points_L[i].norm();
+    const double raw_v = raw_intensity.size() > i ? raw_intensity(0, i) * config_.raw_intensity_scale
+                                                  : 0.0;
+    raw_hist.add(raw_v);
+    out.raw_min = std::min(out.raw_min, raw_v);
+    out.raw_max = std::max(out.raw_max, raw_v);
+
+    if (std::isfinite(r) && r > 1e-6) {
+      const double el_deg =
+          kRad2Deg * std::asin(std::max(-1.0, std::min(1.0, points_L[i].z() / r)));
+      elev_hist.add(el_deg);
+      out.elevation_min_deg = std::min(out.elevation_min_deg, el_deg);
+      out.elevation_max_deg = std::max(out.elevation_max_deg, el_deg);
+    }
+
     int u = 0, v = 0;
     if (!projectPoint(points_L[i], u, v)) {
       out.point_pixel_idx[i] = -1;
@@ -295,11 +385,7 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
       ++out.num_collisions;
     }
 
-    const double r = points_L[i].norm();
-    const float val = static_cast<float>(raw_intensity.size() > i
-                                             ? static_cast<double>(raw_intensity(0, i)) *
-                                                   config_.raw_intensity_scale
-                                             : 0.0);
+    const float val = static_cast<float>(raw_v);
     // Closest point owns the pixel (defines the representative raw intensity).
     if (image.valid(v, u) == 0 || r < image.range(v, u)) {
       image.intensity(v, u) = val;
@@ -308,6 +394,12 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
       image.valid(v, u) = 1;
     }
   }
+
+  out.raw_p50 = raw_hist.percentile(50.0);
+  out.raw_p95 = raw_hist.percentile(95.0);
+  out.raw_p99 = raw_hist.percentile(99.0);
+  out.elevation_p01_deg = elev_hist.percentile(1.0);
+  out.elevation_p99_deg = elev_hist.percentile(99.0);
 
   // -------------------------------------------------------------------
   // 2. Sparse brightness normalization.
@@ -319,7 +411,8 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
   // 3. Back-assign I_F(v_i,u_i) to EVERY projected point (not only the pixel
   //    owners), so points sharing a pixel all stay in the normalized domain.
   // -------------------------------------------------------------------
-  double sum = 0.0;
+  double sum = 0.0, sum_sq = 0.0;
+  SimpleHistogram fhist(256, 0, 256);
   out.filtered_min = std::numeric_limits<double>::max();
   out.filtered_max = std::numeric_limits<double>::lowest();
   for (size_t i = 0; i < N; ++i) {
@@ -334,10 +427,27 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
     out.filtered(0, i) = static_cast<float>(val);
     ++out.num_valid;
     sum += val;
+    sum_sq += val * val;
     out.filtered_min = std::min(out.filtered_min, val);
     out.filtered_max = std::max(out.filtered_max, val);
+    fhist.add(val);
   }
   out.filtered_mean = out.num_valid > 0 ? sum / static_cast<double>(out.num_valid) : 0.0;
+  out.filtered_std =
+      out.num_valid > 0
+          ? std::sqrt(std::max(0.0, sum_sq / static_cast<double>(out.num_valid) -
+                                         out.filtered_mean * out.filtered_mean))
+          : 0.0;
+  out.filtered_p01 = fhist.percentile(1.0);
+  out.filtered_p05 = fhist.percentile(5.0);
+  out.filtered_p50 = fhist.percentile(50.0);
+  out.filtered_p95 = fhist.percentile(95.0);
+  out.filtered_p99 = fhist.percentile(99.0);
+  out.filtered_sat0 = static_cast<size_t>(fhist.bin(0));
+  out.filtered_sat255 = static_cast<size_t>(fhist.bin(255));
+  for (size_t i = 0; i < out.filtered_histogram.size(); ++i) {
+    out.filtered_histogram[i] = static_cast<int>(fhist.bin(i));
+  }
 
   return out;
 }

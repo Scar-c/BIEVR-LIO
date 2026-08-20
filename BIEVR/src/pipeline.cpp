@@ -98,6 +98,36 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
   if (config_.print_dashboard) {
     printDashboardBanner(dashboard_.ascii, "BIEVR-LIO  WAITING FOR DATA");
   }
+
+  // Optional per-frame intensity diagnostics CSV (round-4 validation; gated by
+  // a debug config path, never active by default).
+  if (!config_.intensity_diagnostics_path.empty()) {
+    std::string hist_path = config_.intensity_diagnostics_path;
+    if (hist_path.size() > 4 && hist_path.compare(hist_path.size() - 4, 4, ".csv") == 0) {
+      hist_path = hist_path.substr(0, hist_path.size() - 4) + "_histogram.csv";
+    } else {
+      hist_path += "_histogram.csv";
+    }
+    intensity_diag_csv_ =
+        std::make_shared<std::ofstream>(config_.intensity_diagnostics_path, std::ios::trunc);
+    intensity_hist_csv_ = std::make_shared<std::ofstream>(hist_path, std::ios::trunc);
+    if (intensity_diag_csv_->is_open() && intensity_hist_csv_->is_open()) {
+      *intensity_diag_csv_
+          << "stamp,input_points,valid_points,unique_pixels,collisions,invalid,"
+             "horizontal_boundary_adjusted,vertical_top_clamped,vertical_bottom_clamped,"
+             "vertical_clamped_ratio,filtered_min,filtered_max,filtered_mean,filtered_std,"
+             "filtered_p01,filtered_p05,filtered_p50,filtered_p95,filtered_p99,"
+             "filtered_sat0,filtered_sat255,raw_min,raw_max,raw_p50,raw_p95,raw_p99,"
+             "elev_min_deg,elev_max_deg,elev_p01_deg,elev_p99_deg,"
+             "intensity_preprocess_ms,intensity_map_voxels,observed_voxels,"
+             "selected_intensity_voxels,selected_intensity_points\n";
+    } else {
+      LOG(E, "Failed to open intensity diagnostics CSV at "
+                 << config_.intensity_diagnostics_path);
+      intensity_diag_csv_.reset();
+      intensity_hist_csv_.reset();
+    }
+  }
 }
 
 void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
@@ -140,21 +170,26 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   const bool intensity_enabled = config_.intensity.enabled;
   Intensities filtered_intensity;
   IntensityProcessingResult intensity_result;
+  double intensity_preprocess_ms = 0.0;
   if (intensity_enabled) {
     timing::Timer inten_timer("02a_intensity_preprocess");
     const Pointcloud points_lidar = filtered_L;
+    const auto t0 = std::chrono::steady_clock::now();
     intensity_result = intensity_processor_.process(points_lidar, intensities);
+    const auto t1 = std::chrono::steady_clock::now();
     filtered_intensity = std::move(intensity_result.filtered);
+    intensity_preprocess_ms =
+        std::chrono::duration<double, std::milli>(t1 - t0).count();
     inten_timer.Stop();
 
     // Low-frequency diagnostic (log once): a significant vertical-clamp fraction
     // almost always means vertical_fov_deg / image size is misconfigured for the
     // sensor. Diagnostic only; it does not change the estimator.
-    if (intensity_result.filtered.size() > 0 && !intensity_clamp_warned_) {
+    if (intensity_result.input_points > 0 && !intensity_clamp_warned_) {
       const double clamped_ratio =
           static_cast<double>(intensity_result.vertical_top_clamped +
                               intensity_result.vertical_bottom_clamped) /
-          static_cast<double>(intensity_result.filtered.size());
+          static_cast<double>(intensity_result.input_points);
       if (clamped_ratio > 0.01) {
         LOG(W, "More than 1% of LiDAR points are being clamped to the intensity-image "
                "vertical boundary (ratio " << clamped_ratio << "). Check vertical_fov_deg "
@@ -315,7 +350,7 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
       if (v.intensity_img_.rows() > 0) ++stats.intensity_map_voxels;
     });
     // Low-overhead intensity preprocessing diagnostics (empty when disabled).
-    stats.intensity_input_points = static_cast<int>(intensity_result.filtered.size());
+    stats.intensity_input_points = static_cast<int>(intensity_result.input_points);
     stats.intensity_valid_points = static_cast<int>(intensity_result.num_valid);
     stats.intensity_unique_pixels = static_cast<int>(intensity_result.num_unique_pixels);
     stats.intensity_collisions = static_cast<int>(intensity_result.num_collisions);
@@ -325,10 +360,10 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     stats.intensity_v_top = static_cast<int>(intensity_result.vertical_top_clamped);
     stats.intensity_v_bottom = static_cast<int>(intensity_result.vertical_bottom_clamped);
     stats.intensity_v_clamped_ratio =
-        intensity_result.filtered.size() > 0
+        intensity_result.input_points > 0
             ? static_cast<double>(intensity_result.vertical_top_clamped +
                                   intensity_result.vertical_bottom_clamped) /
-                  static_cast<double>(intensity_result.filtered.size())
+                  static_cast<double>(intensity_result.input_points)
             : 0.0;
     stats.intensity_filtered_min = intensity_result.filtered_min;
     stats.intensity_filtered_max = intensity_result.filtered_max;
@@ -337,6 +372,43 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     printDashboard(dashboard_, header.stamp, T_W_I, x_j_pred.v, acc_bias_, gyro_bias_,
                    timing::Timing::GetMeanSeconds("step"), timing::Timing::GetMaxSeconds("step"),
                    n_effective_points, stats);
+  }
+
+  // Per-frame intensity diagnostics CSV (round-4 validation, debug config only).
+  if (intensity_enabled && intensity_diag_csv_) {
+    writeIntensityDiagnostics(header.stamp, intensity_result, intensity_samples,
+                              intensity_preprocess_ms);
+  }
+}
+
+void Pipeline::writeIntensityDiagnostics(uint64_t stamp, const IntensityProcessingResult& result,
+                                         const IntensitySampleSet& samples,
+                                         double preprocess_ms) {
+  if (!intensity_diag_csv_ || !intensity_hist_csv_) return;
+  const double input = static_cast<double>(result.input_points);
+  const double vclamp =
+      static_cast<double>(result.vertical_top_clamped + result.vertical_bottom_clamped);
+  const double vclamp_ratio = input > 0 ? vclamp / input : 0.0;
+
+  *intensity_diag_csv_ << stamp << "," << result.input_points << "," << result.num_valid << ","
+                       << result.num_unique_pixels << "," << result.num_collisions << ","
+                       << result.num_invalid << "," << result.horizontal_boundary_adjusted << ","
+                       << result.vertical_top_clamped << "," << result.vertical_bottom_clamped << ","
+                       << vclamp_ratio << "," << result.filtered_min << "," << result.filtered_max
+                       << "," << result.filtered_mean << "," << result.filtered_std << ","
+                       << result.filtered_p01 << "," << result.filtered_p05 << ","
+                       << result.filtered_p50 << "," << result.filtered_p95 << ","
+                       << result.filtered_p99 << "," << result.filtered_sat0 << ","
+                       << result.filtered_sat255 << "," << result.raw_min << "," << result.raw_max
+                       << "," << result.raw_p50 << "," << result.raw_p95 << "," << result.raw_p99
+                       << "," << result.elevation_min_deg << "," << result.elevation_max_deg << ","
+                       << result.elevation_p01_deg << "," << result.elevation_p99_deg << ","
+                       << preprocess_ms << "," << map_->size() << "," << samples.observed_voxels
+                       << "," << samples.selected_voxels << "," << samples.points.size() << "\n";
+
+  // One 256-bin filtered-intensity histogram row per frame.
+  for (int i = 0; i < 256; ++i) {
+    *intensity_hist_csv_ << result.filtered_histogram[i] << (i < 255 ? "," : "\n");
   }
 }
 

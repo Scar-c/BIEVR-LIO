@@ -44,6 +44,10 @@ class Pipeline {
     std::string map_frame = "map";
     std::string body_frame = "body";
     std::string log_path = "";
+    // Optional per-frame intensity preprocessing diagnostics CSV (round-4
+    // validation). Empty = disabled. When set, writes <path>/... see
+    // writeIntensityDiagnostics(). Diagnostics only; not part of the paper.
+    std::string intensity_diagnostics_path = "";
 
     size_t min_points_for_map_init = 100;
     size_t map_size_running_threshold = 5;
@@ -83,6 +87,11 @@ class Pipeline {
                     Pointcloud& filtered, Pointcloud& coarse, Pointcloud& fine) const;
   void publishIntensityDebug(const Header& header, const Transform& T_W_I,
                              const IntensitySampleSet& samples, const IntensityPointcloud* map_cloud);
+
+  // Writes one row per frame of the intensity preprocessing diagnostics when
+  // config_.intensity_diagnostics_path is non-empty (and intensity is enabled).
+  void writeIntensityDiagnostics(uint64_t stamp, const IntensityProcessingResult& result,
+                                 const IntensitySampleSet& samples, double preprocess_ms);
 
   // State and optimization management
   bool addState(const uint64_t time, const Quaternion& quat, const V3& p, const V3& v);
@@ -125,6 +134,9 @@ class Pipeline {
   IntensityProcessor intensity_processor_;  // COIN-BIEVR per-frame normalization
   // Logged once: high vertical-clamp fraction suggests a wrong FOV/image size.
   bool intensity_clamp_warned_ = false;
+  // Optional per-frame intensity diagnostics CSV logger (debug config only).
+  std::shared_ptr<std::ofstream> intensity_diag_csv_;
+  std::shared_ptr<std::ofstream> intensity_hist_csv_;
   V3 acc_bias_ = V3::Zero();
   V3 gyro_bias_ = V3::Zero();
   V3 gravity_dir_ = V3(0, 0, 1);
