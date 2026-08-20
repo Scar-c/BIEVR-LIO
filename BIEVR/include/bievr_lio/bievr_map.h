@@ -11,11 +11,10 @@
 
 namespace bievr {
 
-// A raw map point carrying geometry, range and (for COIN-BIEVR) the per-point
-// filtered intensity. Stored in a voxel's pending buffer while it has no stable
+// A raw map point carrying geometry, range and the COIN-BIEVR filtered
+// intensity channel. Stored in a voxel's pending buffer while it has no stable
 // normal, so that when the voxel first becomes observed the intensity texture
-// of earlier frames is not lost. The intensity field is a no-op for the
-// original BIEVR geometry pipeline (range weighting still uses `range`).
+// of earlier frames is not lost (Section 11 of the reproduction plan).
 struct MapPoint {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -28,9 +27,20 @@ struct Voxel {
   bool observed_{false};  // We consider a voxel observed if we have seen enough points inside it
   Transform T_C_W_ = Transform::Identity();
   Transform T_O_W_ = Transform::Identity();
+
+  // Geometry (BIEVR height/bump channel).
   Eigen::MatrixXf bump_img_;
   Eigen::MatrixXf bump_smoothed_;
+  // Shared observation weight: doubles as the validity mask for the height and
+  // the intensity maps (COIN-BIEVR uses the same weighting for both, Eq. 4-5).
   Eigen::MatrixXf bump_weights_;
+
+  // COIN-BIEVR voxel-wise intensity map (photometric channel).
+  Eigen::MatrixXf intensity_img_;
+
+  // Cached voxel-local intensity information vector iota = [Ix, Iy] (Eq. 6).
+  Eigen::Vector2d intensity_information_ = Eigen::Vector2d::Zero();
+
   M3 outer_sum_ = Eigen::Matrix3d::Zero();
   V3 sum_ = Eigen::Vector3d::Zero();
   size_t num_points_{0};
@@ -53,7 +63,12 @@ class BIEVRMap {
 
   explicit BIEVRMap(Config config);
 
-  bool integratePoints(const Pointcloud& input_cloud, const std::vector<double>* ranges = nullptr);
+  // Integrates the full (undistorted) cloud into the map. When `intensities` is
+  // non-null (and index-aligned with the cloud) the voxel-wise intensity map is
+  // updated with the same pixel weights as the height map; when null the
+  // intensity channel is left untouched (strict original-BIEVR behaviour).
+  bool integratePoints(const Pointcloud& input_cloud, const std::vector<double>* ranges = nullptr,
+                       const Intensities* intensities = nullptr);
 
   inline size_t hashIndex(const Point& point) const {
     Eigen::Vector3i voxel_idx = (point * inv_voxel_size_).array().floor().cast<int>();
@@ -64,6 +79,15 @@ class BIEVRMap {
   Eigen::Vector3i getVoxelIdx(const Point& point) const;
   const Voxel* getVoxel(const size_t hash_idx) const;
   bool nearestVoxel(const Point& point, size_t& result) const;
+
+  // Invokes `fn(hash, voxel)` for every stored voxel. Used by debug publishing
+  // (e.g. reconstructing the intensity-textured map as a point cloud).
+  template <typename Fn>
+  void forEachVoxel(Fn&& fn) const {
+    for (const auto& [hash, entry] : map_) {
+      fn(hash, entry.voxel);
+    }
+  }
 
   const double& voxel_size = config_.voxel_size;
   const double& pixel_size = config_.px_size;
@@ -80,14 +104,19 @@ class BIEVRMap {
   // Voxel update / bump-image pipeline, in the order integratePoints invokes them.
   bool updateNormal(Voxel& voxel);
 
-  bool updateBumpImage(const std::vector<MapPoint>& points, Voxel& voxel, bool normal_change);
+  bool updateBumpImage(const std::vector<MapPoint>& points, Voxel& voxel, bool normal_change,
+                       bool update_intensity);
 
   ImageBounds computeImageSize(const Voxel& voxel, const Point& reference_point) const;
 
   void reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::MatrixXi& changed);
 
-  void integratePoints(const std::vector<MapPoint>& points, Voxel& voxel,
-                       Eigen::MatrixXi& changed);
+  void integratePoints(const std::vector<MapPoint>& points, Voxel& voxel, Eigen::MatrixXi& changed,
+                       bool update_intensity);
+
+  // Recomputes voxel.intensity_information_ (Eq. 6) from the intensity image.
+  // Called for each voxel touched by a map update; never a full-map scan.
+  void computeIntensityInformation(Voxel& voxel);
 
   void dilateMask(const Eigen::MatrixXi& changed, const Eigen::MatrixXf& weights,
                   Eigen::MatrixXi& changed_dilated);
