@@ -43,52 +43,86 @@ def pct(vals, q):
 
 
 def run_evo_ape(gt, est):
-    """Run evo_ape tum (no offset search, t_max_diff 0.1, no alignment change)."""
+    """Run evo_ape tum (GEODE semantics: Umeyama alignment, translation part,
+    t_max_diff 0.1, no offset search)."""
     cmd = ["evo_ape", "tum", gt, est, "-a", "--t_max_diff", "0.1",
-           "--n_to_align", "-1", "--pose_relation", "trans_part", "-as"]
+           "--pose_relation", "trans_part"]
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         return None, out.stderr
-    # Parse the 'Statistics' block.
+    # Parse the 'Statistics' block (tab/space separated: "rmse  1.52").
     stats = {}
     for line in out.stdout.splitlines():
-        if ":" in line and line.split(":")[0].strip() in ("rmse", "mean", "median", "max", "min"):
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in ("rmse", "mean", "median", "max", "min"):
             try:
-                stats[line.split(":")[0].strip()] = float(line.split(":")[1].strip().split()[0])
-            except Exception:
+                stats[parts[0]] = float(parts[1])
+            except ValueError:
                 pass
     return stats, out.stdout
 
 
+import numpy as np
+
+
+def _umeyama(p_src, p_dst):
+    """Least-squares SE(3) alignment src->dst (no scale)."""
+    mu_s = p_src.mean(axis=0)
+    mu_d = p_dst.mean(axis=0)
+    x = p_src - mu_s
+    y = p_dst - mu_d
+    cov = x.T @ y
+    u, _, vt = np.linalg.svd(cov)
+    d = np.sign(np.linalg.det(u @ vt))
+    s = np.eye(3)
+    s[2, 2] = d
+    r = u @ s @ vt
+    t = mu_d - r @ mu_s
+    return r, t
+
+
 def divergence_onset(est, gt):
-    """First time translation APE(t) is sustained (>1.0 s) above thresholds."""
+    """First time ALIGNED translation APE(t) stays above a threshold for
+    >= 1.0 s (Umeyama alignment; diagnostic only, not the official metric)."""
     if not gt:
         return None, None, None
-    common = sorted(set(est) & set(gt))
-    if len(common) < 10:
+    ets = sorted(est)
+    gts = sorted(gt)
+    # tolerant nearest-GT match within 50 ms.
+    pairs = []
+    import bisect
+    for t in ets:
+        i = bisect.bisect_left(gts, t)
+        best = None
+        for j in (i - 1, i, i + 1):
+            if 0 <= j < len(gts):
+                dt = abs(gts[j] - t)
+                if best is None or dt < best[0]:
+                    best = (dt, j)
+        if best and best[0] < 0.05:
+            pairs.append((t, gts[best[1]]))
+    if len(pairs) < 10:
         return None, None, None
-    # TUM: x y z qx qy qz qw
-    def trans_diff(a, b):
-        return math.dist(a[0:3], b[0:3])
-    times = []
+    # Umeyama-align est positions onto GT (over the matched subset).
+    p_e = np.array([est[t][0:3] for t, _ in pairs])
+    p_g = np.array([gt[t][0:3] for _, t in pairs])
+    r, tvec = _umeyama(p_e, p_g)
     ape = []
-    for t in common:
-        times.append(t)
-        ape.append(trans_diff(est[t], gt[t]))
+    for t, tg in pairs:
+        aligned = r @ np.array(est[t][0:3]) + tvec
+        ape.append((t, float(np.linalg.norm(aligned - np.array(gt[tg][0:3])))))
     out = {}
     for thr in (0.5, 1.0, 2.0):
         onset = None
-        i = 0
-        while i < len(times):
-            if ape[i] > thr:
-                j = i
-                while j < len(times) and times[j] - times[i] <= 1.0 and ape[j] > thr:
-                    j += 1
-                if j < len(times) and times[j] - times[i] >= 1.0 and all(
-                        a > thr for a in ape[i:j]):
-                    onset = times[i]
-                    break
-            i += 1
+        for i in range(len(ape)):
+            if ape[i][1] <= thr:
+                continue
+            j = i
+            while j < len(ape) and ape[j][0] - ape[i][0] < 1.0 and ape[j][1] > thr:
+                j += 1
+            if j < len(ape) and ape[j][0] - ape[i][0] >= 1.0:
+                onset = ape[i][0]
+                break
         out[thr] = onset
     return out[0.5], out[1.0], out[2.0]
 
@@ -145,6 +179,8 @@ def main():
                             rt = 0.0
             # classification
             if nan or coverage < 0.95:
+                cls = "FAIL"
+            elif path > 3.0 * max(67.67, 27.77):  # obvious unbounded divergence
                 cls = "FAIL"
             elif ape is None:
                 cls = "NUMERICALLY_STABLE" if not nan else "DIVERGED"

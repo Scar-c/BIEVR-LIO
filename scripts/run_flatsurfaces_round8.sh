@@ -38,15 +38,15 @@ run_coin() {
   local dir="$RESULTS/$name"
   mkdir -p "$dir"
   # args: sed expressions applied to the Avia base config
-  sed -e "s#^  photo_diagnostics_path: .*#  photo_diagnostics_path: \"$REPO/$dir/photo.csv\"#" \
-      -e "s#^  trajectory_path: .*#  trajectory_path: \"$REPO/$dir/trajectory.tum\"#" \
+  sed -e "s#^  photo_diagnostics_path: .*#  photo_diagnostics_path: \"$dir/photo.csv\"#" \
+      -e "s#^  trajectory_path: .*#  trajectory_path: \"$dir/trajectory.tum\"#" \
       -e "s/^  timing: .*/  timing: True/" \
       -e "s/^  dashboard: .*/  dashboard: False/" \
-      -e "$@" "$AVIA_CFG" > "$dir/config_used.yaml"
+      "$@" "$AVIA_CFG" > "$dir/config_used.yaml"
   echo "=== $name ==="
   /usr/bin/time -v \
     rosrun bievr_lio_ros process_bag \
-      --params_file "$REPO/$dir/config_used.yaml" \
+      --params_file "$dir/config_used.yaml" \
       --sensor_config_file "$SENSOR_CFG" --bag "$BAG" \
       > "$dir/stdout.log" 2> "$dir/stderr.log" || true
   grep -E "Maximum resident|Elapsed" "$dir/stderr.log" > "$dir/timing.txt" || true
@@ -54,13 +54,13 @@ run_coin() {
 
 # B0: true BIEVR baseline.
 mkdir -p "$RESULTS/B0"
-sed -e "s#^  trajectory_path: .*#  trajectory_path: \"$REPO/$RESULTS/B0/trajectory.tum\"#" \
+sed -e "s#^  trajectory_path: .*#  trajectory_path: \"$RESULTS/B0/trajectory.tum\"#" \
     -e "s/^  timing: .*/  timing: True/" \
     -e "s/^  dashboard: .*/  dashboard: False/" \
     "$PARAMS_CFG" > "$RESULTS/B0/config_used.yaml"
 echo "=== B0 ==="
 /usr/bin/time -v rosrun bievr_lio_ros process_bag \
-  --params_file "$REPO/$RESULTS/B0/config_used.yaml" \
+  --params_file "$RESULTS/B0/config_used.yaml" \
   --sensor_config_file "$SENSOR_CFG" --bag "$BAG" \
   > "$RESULTS/B0/stdout.log" 2> "$RESULTS/B0/stderr.log" || true
 grep -E "Maximum resident|Elapsed" "$RESULTS/B0/stderr.log" > "$RESULTS/B0/timing.txt" || true
