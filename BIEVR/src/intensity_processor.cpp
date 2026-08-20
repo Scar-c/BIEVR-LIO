@@ -208,7 +208,8 @@ Intensities IntensityProcessor::process(const Pointcloud& points_L,
   // 0/1 validity mask derived from the point-index map (point_index == -1 means
   // empty). Using point_index directly as the mask would wrongly treat the
   // pixel owned by point 0 (index 0) as empty.
-  image.intensity = normalizeImage(image.intensity, image.point_index);
+  const Eigen::MatrixXi valid_mask = (image.point_index.array() >= 0).cast<int>();
+  image.intensity = normalizeImage(image.intensity, valid_mask);
 
   for (int v = 0; v < image.intensity.rows(); ++v) {
     for (int u = 0; u < image.intensity.cols(); ++u) {
