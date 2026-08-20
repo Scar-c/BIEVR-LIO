@@ -9,7 +9,7 @@
 | Upstream repo | https://github.com/ethz-asl/BIEVR-LIO.git |
 | Baseline SHA | `21121698f273d6fbfffca57546b940edb1de2ff0` (`main`, "Merge pull request #5 from ethz-asl/feature/humble-ci") |
 | Branch | `coin_bievr` |
-| Implementation HEAD before documentation commit | `9b53153` (round-5; round-4 impl head was `7b5c8ff`) |
+| Implementation HEAD before documentation commit | `d8ce276` (round-6; round-5 impl head was `9b53153`) |
 | Backup branch | `coin_bievr_backup_before_rebase` @ `80c3a9f` (pre-reorganization full-state WIP commit, keeps the entire implementation in one place) |
 | Rebased from | clean `main` at baseline SHA |
 
@@ -20,8 +20,10 @@
 > diagnostics. Round 4 (commits 21-25) fixes a config-loader bug, adds per-frame
 > intensity diagnostics + CSV export and runs the first real-data GEODE/Avia
 > preprocessing validation. Round 5 (commits 26-30) adds photometric safety
-> validation (shadow diagnostics, maturity/warmup gating, lambda sweep); see
-> Section 7e below.
+> validation (shadow diagnostics, maturity/warmup gating, lambda sweep) which
+> FAILED the real-map Jacobian FD gate. Round 6 (commits 31-34) fixes the
+> photometric derivative (exact masked-bilinear gradient) and validates it with
+> the three-level FD; see Section 7f below.
 
 ## 2. Commit Table
 
@@ -76,6 +78,14 @@ Round 5 commits (photometric safety validation, appended on top):
 | 27 | `b460750` | b460750 | feat(debug): per-frame photometric safety diagnostics CSV + pipeline wiring |
 | 28 | `e1bd9fc` | e1bd9fc | test(registration): cover shadow mode, photometric warmup and map-maturity gating |
 | 29 | `9b53153` | 9b53153 | tools: photometric safety analysis + round-5 sweep scripts |
+
+Round 6 commits (photometric derivative correctness, appended on top):
+
+| # | Commit | SHA | Subject |
+|---|---|---|---|
+| 31 | `f694db3` | f694db3 | fix(photo): use exact derivative of masked bilinear intensity sampling |
+| 32 | `5097649` | 5097649 | test(photo): validate exact interpolation and fixed-correspondence Jacobian |
+| 33 | `d8ce276` | d8ce276 | tools: analyze round-6 photometric derivative validation |
 
 ## 7b. Second Review Round (round-2 fixes)
 
@@ -217,6 +227,40 @@ Jacobian FD gate fails, and at lambda_ref the trajectory diverges on Shield 1.
 Classification: C0/L0 SAFE; L1/L2 MARGINAL (stable trajectory, FD gate not met);
 L3 UNSAFE (diverged). Photometric_scale decision deferred to the coordinator;
 do not enable C-lambda until the Jacobian accuracy issue is resolved.
+
+## 7f. Round 6 (photometric derivative correctness)
+
+**Bug fixed.** The photometric residual used the masked-bilinear VALUE
+(getSubPixelIntensityValue) while the Jacobian gradient used a 2-pixel central
+difference - two different functions, which diverged on real texture (round-5 FD
+median rel err 3.53). Now `sampleIntensityBilinearWithGradient` returns the
+value AND the exact quotient-rule derivative of the same masked normalized
+bilinear interpolation (intensity per pixel). The residual and Jacobian come
+from the SAME call. The geometry height gradient and the Eq.6 sampling
+central-difference are untouched (baseline protected).
+
+**Three-level FD validation (real Shield1/Avia map, shadow C0):**
+- Level A (image-space): 1036 scalar derivatives, median 4.2e-12, P95 2.7e-9,
+  sign 100% -> PASS.
+- Level B (fixed-correspondence 6-DOF): 320 points / 1920 scalars, median
+  1.3e-10, P95 6.0e-8, sign 100%; per-DOF all ~1e-9..1e-11; analytic == numeric
+  J magnitudes -> PASS.
+- Level C (full-lookup switching): voxel 0.02%, cell 0.12%, validity 0.016%
+  switch ratios (GOOD); no-switch subset 208214 samples, median 7.4e-10 ->
+  consistent with Level B.
+
+**Round-5 lambda_ref invalidation.** Round-5 lambda_ref = 0.0453 MUST NOT be
+treated as a valid calibrated photometric scale. The previous H/lambda^2
+back-calculation ignores the lambda-dependence introduced by robust weighting.
+Photometric-scale calibration is deferred until photometric derivative
+correctness is established (now done) and robust-weighting semantics are
+resolved. No lambda sweep was performed in round 6.
+
+**Round-6 status.** Photometric linearization is now mathematically consistent
+(Level A/B PASS). Photometric optimization is STILL NOT enabled; the next round
+must independently address robust (Huber) weighting semantics and
+photometric_scale calibration before a first trustworthy C0-vs-C-lambda
+experiment.
 
 ## 3. Per-commit Changed Files
 
