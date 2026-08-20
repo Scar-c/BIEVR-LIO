@@ -113,3 +113,24 @@ install(FILES
   ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
 )
+
+# ---------------------------------------------------------------------------
+# Unit tests (COIN-BIEVR reproduction plan Sections 43-48)
+# ---------------------------------------------------------------------------
+option(BIEVR_BUILD_TESTS "Build BIEVR unit tests" OFF)
+if(BIEVR_BUILD_TESTS)
+  enable_testing()
+  file(GLOB BIEVR_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp)
+  foreach(src ${BIEVR_TEST_SOURCES})
+    get_filename_component(test_name ${src} NAME_WE)
+    add_executable(${test_name} ${src})
+    target_link_libraries(${test_name} PRIVATE ${PROJECT_NAME}::${PROJECT_NAME})
+    set_target_properties(${test_name} PROPERTIES
+      CXX_STANDARD 20
+      CXX_STANDARD_REQUIRED ON
+      CXX_EXTENSIONS OFF
+    )
+    target_compile_options(${test_name} PRIVATE $<$<CXX_COMPILER_ID:GNU>:-fconcepts>)
+    add_test(NAME ${test_name} COMMAND ${test_name})
+  endforeach()
+endif()
