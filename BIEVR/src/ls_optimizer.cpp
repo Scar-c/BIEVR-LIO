@@ -308,10 +308,61 @@ inline bool sampleMapWeight(const Voxel* voxel, double x, double y, double& weig
 
 }  // namespace
 
+LsqRegistration::PhotoMatchStatus LsqRegistration::evaluatePhotometricTerm(
+    const Transform& T_W_L, size_t i, double* I_P, double* map_weight, double* r, Row6* J_photo,
+    Eigen::RowVector2d* grad_per_meter, size_t* voxel_hash) const {
+  const double min_weight = config_.photometric_min_map_weight;
+  const double inv_size = map_.inv_px_size;
+
+  const Point p_W = T_W_L.linear() * intensity_points_j_[i] + T_W_L.translation();
+  size_t hash = map_.hashIndex(p_W);
+  const Voxel* voxel = map_.getVoxel(hash);
+  if (!voxel) {
+    if (!map_.nearestVoxel(p_W, hash)) return PhotoMatchStatus::kNoVoxel;
+    voxel = map_.getVoxel(hash);
+    if (!voxel) return PhotoMatchStatus::kNoVoxel;
+  }
+
+  const auto& T_C_W = voxel->T_C_W_;
+  const Point p_o = T_C_W * p_W;
+  const double x = p_o.x() * inv_size;
+  const double y = p_o.y() * inv_size;
+
+  double mw = 0.0;
+  if (!sampleMapWeight(voxel, x, y, mw)) return PhotoMatchStatus::kNoSample;
+  if (map_weight) *map_weight = mw;
+  if (mw < min_weight) return PhotoMatchStatus::kImmature;
+
+  IntensitySample sample;
+  if (!sampleIntensityBilinearWithGradient(voxel, x, y, sample)) return PhotoMatchStatus::kNoSample;
+
+  const double I_i = intensity_values_j_(0, i);
+  const double I_P_val = sample.value;
+  if (I_P) *I_P = I_P_val;
+  if (r) *r = I_i - I_P_val;
+
+  // Exact masked-bilinear photometric gradient (intensity per pixel), converted
+  // to per meter by the projection chain rule. EXACTLY ONE inv_size scaling:
+  // this is the Round-6-validated construction shared by every path.
+  Eigen::RowVector2d photo_grad;
+  photo_grad << sample.gradient_pixel.x(), sample.gradient_pixel.y();
+  photo_grad *= inv_size;
+  if (grad_per_meter) *grad_per_meter = photo_grad;
+
+  if (J_photo) {
+    Eigen::Matrix<double, 3, 6> SE3_Jac;
+    SE3_Jac.block<3, 3>(0, 3) = T_C_W.linear() * T_W_L.linear();
+    SE3_Jac.block<3, 3>(0, 0).noalias() =
+        -SE3_Jac.block<3, 3>(0, 3) * intensity_skew_points_j_[i];
+    *J_photo = -(photo_grad * SE3_Jac.topRows<2>());
+  }
+  if (voxel_hash) *voxel_hash = hash;
+  return PhotoMatchStatus::kValid;
+}
+
 double LsqRegistration::linearizePhotometric(const Transform& T_W_L, bool compute_jacobians,
                                              Accumulator& acc, bool collect_stats) {
   const double lambda = config_.photometric_scale;
-  const double min_weight = config_.photometric_min_map_weight;
 
   // For the final diagnostics we run serially so photo_samples_ can be filled
   // without data races; for the LM iterations we use the parallel reduce.
@@ -319,61 +370,35 @@ double LsqRegistration::linearizePhotometric(const Transform& T_W_L, bool comput
     for (size_t i = 0; i < intensity_points_j_.size(); ++i) {
       ++photo_diag_.candidates;
 
-      Point p_W = T_W_L.linear() * intensity_points_j_[i] + T_W_L.translation();
-      size_t hash = map_.hashIndex(p_W);
-      const Voxel* voxel = map_.getVoxel(hash);
-      if (!voxel) {
-        if (!map_.nearestVoxel(p_W, hash)) continue;
-        voxel = map_.getVoxel(hash);
-        if (!voxel) continue;
-      }
-
-      const double inv_size = map_.inv_px_size;
-      const auto& T_C_W = voxel->T_C_W_;
-      const Point p_o = T_C_W * p_W;
-      const double x = p_o.x() * inv_size;
-      const double y = p_o.y() * inv_size;
-
-      double map_weight = 0.0;
-      if (!sampleMapWeight(voxel, x, y, map_weight)) continue;
-      if (map_weight < min_weight) {
+      double I_P = 0.0, map_weight = 0.0, r = 0.0;
+      Row6 J_photo;
+      Eigen::RowVector2d grad_per_meter;
+      const PhotoMatchStatus st =
+          evaluatePhotometricTerm(T_W_L, i, &I_P, &map_weight, &r, &J_photo, &grad_per_meter,
+                                  nullptr);
+      if (st == PhotoMatchStatus::kImmature) {
         ++photo_diag_.immature_matches;
         continue;
       }
+      if (st != PhotoMatchStatus::kValid) continue;
 
-      const double I_i = intensity_values_j_(0, i);
-      IntensitySample isample;
-      if (!sampleIntensityBilinearWithGradient(voxel, x, y, isample)) continue;
-      const double I_P = isample.value;
       if (!compute_jacobians) {
-        const double r = lambda * (I_i - I_P);
-        acc.add(r, nullptr);
+        const double r_l = lambda * r;
+        acc.add(r_l, nullptr);
         continue;
       }
 
-      Eigen::Matrix<double, 3, 6> SE3_Jac;
-      SE3_Jac.block<3, 3>(0, 3) = T_C_W.linear() * T_W_L.linear();
-      SE3_Jac.block<3, 3>(0, 0).noalias() =
-          -SE3_Jac.block<3, 3>(0, 3) * intensity_skew_points_j_[i];
-
-      // Exact masked-bilinear photometric gradient (intensity per pixel),
-      // converted to per meter by the projection chain rule (inv_size).
-      Eigen::RowVector2d photo_grad;
-      photo_grad << isample.gradient_pixel.x(), isample.gradient_pixel.y();
-      photo_grad *= inv_size;
-      Row6 J_photo = -(photo_grad * SE3_Jac.topRows<2>());
-
-      const double r = lambda * (I_i - I_P);
+      const double r_l = lambda * r;
       const Row6 J_scaled = lambda * J_photo;
-      acc.add(r, &J_scaled);
+      acc.add(r_l, &J_scaled);
 
       ++photo_diag_.valid_matches;
       PhotoSample psample;
       psample.p_j = intensity_points_j_[i];
-      psample.I_i = I_i;
-      psample.r = I_i - I_P;
-      psample.J = J_photo;
-      psample.grad_norm = photo_grad.norm();
+      psample.I_i = intensity_values_j_(0, i);  // source intensity I_i
+      psample.r = r;                            // I_i - I_P (unscaled)
+      psample.J = J_photo;                      // unscaled Jacobian
+      psample.grad_norm = grad_per_meter.norm();
       photo_samples_.push_back(psample);
     }
     return acc.error_sum;
@@ -384,67 +409,20 @@ double LsqRegistration::linearizePhotometric(const Transform& T_W_L, bool comput
       acc,  // identity
       [&](const tbb::blocked_range<size_t>& r, Accumulator local_acc) -> Accumulator {
         for (size_t i = r.begin(); i != r.end(); ++i) {
-          Point p_W = T_W_L.linear() * intensity_points_j_[i] + T_W_L.translation();
-          size_t hash = map_.hashIndex(p_W);
-          const Voxel* voxel = map_.getVoxel(hash);
-          if (!voxel) {
-            if (!map_.nearestVoxel(p_W, hash)) continue;
-            voxel = map_.getVoxel(hash);
-            if (!voxel) continue;
-          }
+          double I_P = 0.0, map_weight = 0.0, r = 0.0;
+          Row6 J_photo;
+          const PhotoMatchStatus st = evaluatePhotometricTerm(T_W_L, i, &I_P, &map_weight, &r,
+                                                              &J_photo, nullptr, nullptr);
+          if (st != PhotoMatchStatus::kValid) continue;
 
-          const double inv_size = map_.inv_px_size;
-          const auto& T_C_W = voxel->T_C_W_;
-          const Point p_o = T_C_W * p_W;
-
-          const double x = p_o.x() * inv_size;
-          const double y = p_o.y() * inv_size;
-
-          // Map-maturity gate: only use photo matches whose (shared) map weight
-          // W(u,v) >= photometric_min_map_weight.
-          double map_weight = 0.0;
-          if (!sampleMapWeight(voxel, x, y, map_weight)) continue;
-          if (map_weight < min_weight) {
-            continue;
-          }
-
-          const double I_i = intensity_values_j_(0, i);
-          IntensitySample sample;
-          if (!sampleIntensityBilinearWithGradient(voxel, x, y, sample)) continue;
-          const double I_P = sample.value;
+          const double r_l = lambda * r;
           if (!compute_jacobians) {
-            const double r = lambda * (I_i - I_P);
-            local_acc.add(r, nullptr);
+            local_acc.add(r_l, nullptr);
             continue;
           }
 
-          Eigen::Matrix<double, 3, 6> SE3_Jac;
-          SE3_Jac.block<3, 3>(0, 3) = T_C_W.linear() * T_W_L.linear();
-          SE3_Jac.block<3, 3>(0, 0).noalias() =
-              -SE3_Jac.block<3, 3>(0, 3) * intensity_skew_points_j_[i];
-
-          // Exact masked-bilinear photometric gradient (intensity per pixel),
-          // converted to per meter by the projection chain rule (inv_size).
-          Eigen::RowVector2d photo_grad;
-          photo_grad << sample.gradient_pixel.x(), sample.gradient_pixel.y();
-          photo_grad *= inv_size;
-          photo_grad *= inv_size;
-          Row6 J_photo = -(photo_grad * SE3_Jac.topRows<2>());
-
-          const double r = lambda * (I_i - I_P);
           const Row6 J_scaled = lambda * J_photo;
-          local_acc.add(r, &J_scaled);
-
-          if (collect_stats) {
-            ++photo_diag_.valid_matches;
-            LsqRegistration::PhotoSample sample;
-            sample.p_j = intensity_points_j_[i];
-            sample.I_i = I_i;
-            sample.r = I_i - I_P;  // unscaled residual
-            sample.J = J_photo;    // unscaled Jacobian
-            sample.grad_norm = (photo_grad).norm();
-            photo_samples_.push_back(sample);
-          }
+          local_acc.add(r_l, &J_scaled);
         }
 
         return local_acc;
@@ -456,6 +434,46 @@ double LsqRegistration::linearizePhotometric(const Transform& T_W_L, bool comput
       });
   acc = result;
   return acc.error_sum;
+}
+
+LsqRegistration::PhotometricParity LsqRegistration::runPhotometricParity(const Transform& T_W_L) {
+  PhotometricParity p;
+
+  // The skew array is normally precomputed in computeTransformation(); fill it
+  // here so the parity hook can be used standalone (e.g. from the unit test).
+  if (intensity_skew_points_j_.size() != intensity_points_j_.size()) {
+    intensity_skew_points_j_.resize(intensity_points_j_.size());
+    for (size_t i = 0; i < intensity_points_j_.size(); ++i) {
+      intensity_skew_points_j_[i] = skew(intensity_points_j_[i]);
+    }
+  }
+
+  // Path A: serial diagnostic accumulation (collect_stats=true).
+  Accumulator acc_serial;
+  acc_serial.huber_delta = config_.huber_delta;
+  acc_serial.collect_statistics = true;
+  p.cost_serial = linearizePhotometric(T_W_L, /*compute_jacobians=*/true, acc_serial,
+                                       /*collect_stats=*/true);
+  p.count_serial = acc_serial.count;
+  p.H_serial = acc_serial.H;
+  p.b_serial = acc_serial.b;
+
+  // Path B: parallel production accumulation (collect_stats=false).
+  Accumulator acc_parallel;
+  acc_parallel.huber_delta = config_.huber_delta;
+  acc_parallel.collect_statistics = true;
+  p.cost_parallel = linearizePhotometric(T_W_L, /*compute_jacobians=*/true, acc_parallel,
+                                         /*collect_stats=*/false);
+  p.count_parallel = acc_parallel.count;
+  p.H_parallel = acc_parallel.H;
+  p.b_parallel = acc_parallel.b;
+
+  // Relative errors, normalized by max(1, |x|) as in the parity gate.
+  const double cost_denom = std::max({1.0, std::abs(p.cost_serial), std::abs(p.cost_parallel)});
+  p.cost_rel = std::abs(p.cost_serial - p.cost_parallel) / cost_denom;
+  p.H_rel = (p.H_serial - p.H_parallel).norm() / std::max(1.0, p.H_serial.norm());
+  p.b_rel = (p.b_serial - p.b_parallel).norm() / std::max(1.0, p.b_serial.norm());
+  return p;
 }
 
 double LsqRegistration::linearize(const Transform& T_W_L, Matrix66* H, Vector6* b,
@@ -657,6 +675,30 @@ void LsqRegistration::finalizePhotoDiagnostics(const Transform& T_W_L,
     d.photo_step_translation_m = dphoto.tail<3>().norm();
     const Eigen::AngleAxisd aa(so3_exp(dphoto.head<3>()).toRotationMatrix());
     d.photo_step_rotation_deg = std::abs(aa.angle()) * 180.0 / M_PI;
+  }
+
+  // Round-9 weak-direction directional audit (sections 47-49): the pose
+  // perturbation is a RIGHT perturbation in the IMU/body frame, so the world
+  // weak eigenvectors must be rotated into that frame:
+  //   v_I = R_WI^T v_W,  d = [0,0,0, v_I],  q = d^T H d,  s = d^T b.
+  // H_photo is the direct robustified production Hessian at this lambda.
+  if (photo_acc.count > 0 && (v1_W_.norm() > 1e-12 || v2_W_.norm() > 1e-12)) {
+    const Eigen::Matrix3d R_WI = T_W_L.linear();
+    const Eigen::Vector3d v1_I = R_WI.transpose() * v1_W_;
+    const Eigen::Vector3d v2_I = R_WI.transpose() * v2_W_;
+    auto dir_info = [](const Eigen::Matrix<double, 6, 1>& d, const Matrix66& H, const Vector6& b,
+                       double* q, double* s) {
+      if (q) *q = d.dot(H * d);
+      if (s) *s = d.dot(b);
+    };
+    Eigen::Matrix<double, 6, 1> d1 = Eigen::Matrix<double, 6, 1>::Zero();
+    Eigen::Matrix<double, 6, 1> d2 = Eigen::Matrix<double, 6, 1>::Zero();
+    d1.tail<3>() = v1_I;
+    d2.tail<3>() = v2_I;
+    dir_info(d1, geo_acc.H, geo_acc.b, &d.q_geo_v1, &d.s_geo_v1);
+    dir_info(d2, geo_acc.H, geo_acc.b, &d.q_geo_v2, &d.s_geo_v2);
+    dir_info(d1, photo_acc.H, photo_acc.b, &d.q_photo_v1, &d.s_photo_v1);
+    dir_info(d2, photo_acc.H, photo_acc.b, &d.q_photo_v2, &d.s_photo_v2);
   }
 }
 

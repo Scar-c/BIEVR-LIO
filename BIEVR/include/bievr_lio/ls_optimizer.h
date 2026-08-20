@@ -127,6 +127,32 @@ struct PhotometricDiagnostics {
   // analysis. Filled by the pipeline (intensity_samples.weak_eigenvalues).
   double geo_lambda1 = 0.0, geo_lambda2 = 0.0, geo_lambda3 = 0.0;
   int geo_two_weak_flag = 0;
+  // Round-9: weak-direction / Eq.7-8 audit (diagnostic only; sections 42-49).
+  // All per-frame raw values; the analysis script aggregates percentiles.
+  Eigen::Vector3d eta_world = Eigen::Vector3d::Zero();  // eta (world frame)
+  // Temporal metrics vs the previous frame (|eta_t^T eta_{t-1}| and the
+  // modulo-sign angle in degrees).
+  double eta_abs_dot_prev = 1.0;
+  double eta_angle_prev_deg = 0.0;
+  // ||P_w(t) - P_w(t-1)||_F with P_w = v1 v1^T + v2 v2^T (sign/basis agnostic).
+  double weak_subspace_diff_F = 0.0;
+  // Selected top-100 voxel turnover (0 when no previous frame).
+  double selected_voxel_jaccard = 0.0;
+  double selected_voxel_retention = 0.0;
+  // Eq.8 selected / candidate score distributions.
+  double selected_score_p10 = 0.0, selected_score_p50 = 0.0, selected_score_p90 = 0.0,
+         selected_score_max = 0.0;
+  double candidate_score_p50 = 0.0, candidate_score_p90 = 0.0, candidate_score_p99 = 0.0;
+  // Directional Hessian / gradient information projected onto the two weak
+  // eigenvectors (converted to the IMU/body frame of the right perturbation):
+  // q = d^T H d, s = d^T b. H_photo is the DIRECT robustified production
+  // Hessian at this frame's lambda (never H/lambda^2).
+  double q_geo_v1 = 0.0, q_geo_v2 = 0.0, q_photo_v1 = 0.0, q_photo_v2 = 0.0;
+  double s_geo_v1 = 0.0, s_geo_v2 = 0.0, s_photo_v1 = 0.0, s_photo_v2 = 0.0;
+  // Round-9 real-data serial-vs-production photometric parity (shadow C0 runs).
+  // Filled by the pipeline via runPhotometricParity at the final pose.
+  int parity_count_serial = 0, parity_count_parallel = 0;
+  double parity_cost_rel = 0.0, parity_H_rel = 0.0, parity_b_rel = 0.0;
 };
 
 // Round-7: per-(lambda, frame) evaluation of the DIRECT robustified photometric
@@ -470,8 +496,40 @@ class LsqRegistration {
   // Round-5 photometric safety diagnostics of the final pose linearization.
   const PhotometricDiagnostics& photometricDiagnostics() const { return photo_diag_; }
 
+  // Round-9 P0 regression hook: photometric linearization through BOTH the
+  // serial diagnostic path and the parallel production path at the same pose,
+  // returning the achieved count/cost/H/b relative errors (diagnostics only).
+  struct PhotometricParity {
+    int count_serial = 0, count_parallel = 0;
+    double cost_serial = 0.0, cost_parallel = 0.0;
+    Matrix66 H_serial = Matrix66::Zero(), H_parallel = Matrix66::Zero();
+    Vector6 b_serial = Vector6::Zero(), b_parallel = Vector6::Zero();
+    double cost_rel = 0.0, H_rel = 0.0, b_rel = 0.0;
+  };
+  PhotometricParity runPhotometricParity(const Transform& T_W_L);
+
+  // Round-9: Eq.7 weak eigenvectors (world frame) used only to compute the
+  // directional Hessian/gradient audit at the final pose. Must be set before
+  // computeTransformation. Diagnostic only; never changes the solve.
+  void setWeakDirections(const Eigen::Vector3d& v1_W, const Eigen::Vector3d& v2_W) {
+    v1_W_ = v1_W;
+    v2_W_ = v2_W;
+  }
+
  private:
   bool isConverged(const Transform& delta) const;
+
+  // Round-9: SINGLE per-point photometric term implementation shared by the
+  // serial diagnostic path, the parallel production accumulator and the FD
+  // diagnostics, so the linearization math can never diverge between them.
+  // Returns the match status; on kValid it fills r (unscaled residual
+  // I_i - I_P), J_photo (unscaled, exactly one inv_px_size chain rule),
+  // grad_per_meter and the voxel hash. `map_weight` is filled on kImmature too.
+  enum class PhotoMatchStatus { kValid, kNoVoxel, kNoSample, kImmature };
+  PhotoMatchStatus evaluatePhotometricTerm(const Transform& T_W_L, size_t i, double* I_P,
+                                           double* map_weight, double* r, Row6* J_photo,
+                                           Eigen::RowVector2d* grad_per_meter,
+                                           size_t* voxel_hash) const;
 
   double linearizeGeometry(const Transform& T_W_L, bool compute_jacobians, Accumulator& acc) const;
   // Non-const: with collect_stats it also fills photo_diag_ / photo_samples_
@@ -526,6 +584,8 @@ class LsqRegistration {
   const Pointcloud& intensity_points_j_;
   const Intensities& intensity_values_j_;
   std::vector<M3> intensity_skew_points_j_;
+  // Round-9: Eq.7 weak eigenvectors (world frame) for the directional audit.
+  Eigen::Vector3d v1_W_ = Eigen::Vector3d::Zero(), v2_W_ = Eigen::Vector3d::Zero();
   bool converged_ = false;
   int num_effective_points_ = 0;
   int num_geometry_effective_points_ = 0;
