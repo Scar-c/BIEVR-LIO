@@ -1,0 +1,37 @@
+# COIN-BIEVR preset. Load this together with (or instead of) params.yaml to
+# enable the COIN-BIEVR photometric branch. All values not reported by the
+# COIN-BIEVR supplement are marked TBD and must NOT be treated as official
+# paper parameters (second review Section 15).
+#
+# Usage (both files are merged, this one wins per leaf):
+#   --params_file config/params.yaml --sensor_config_file config/params_coin_bievr.yaml
+# or point the launch directly at this file.
+
+intensity:
+  enabled: True # Master switch: enables the COIN-BIEVR photometric branch.
+
+  preprocessing:
+    enabled: True
+    projection: "spherical" # "spherical" (Eq. 1); "ouster_lut" needs a factory LUT
+    image_width: 1024 # TBD per sensor
+    image_height: 64 # TBD per sensor
+    vertical_fov_deg: 50.0 # TBD per sensor
+    brightness_window_u: 0 # TBD: supplement only says "large window"; 0 = full image
+    brightness_window_v: 0 # TBD
+    normalization_scale: 140.0 # s in I_F = s*I/(I_B+1)
+    remove_lines: False # Ouster line-artifact removal (enable in Ouster sensor yaml)
+    gaussian_blur: False
+    raw_intensity_scale: 1.0
+    use_ouster_lut: False
+
+  sampling:
+    enabled: True
+    num_voxels: 100 # N_intensity_voxel (paper)
+    downsample_resolution_m: 0.1 # intensity point downsampling (paper)
+    weak_eigen_ratio: 10.0 # eta switch 10*lambda1 > lambda2 (paper)
+    normalize_eta: True # TBD (paper does not specify)
+    score_mode: "abs_components" # Eq.8 sign handling; default abs_components (see code)
+
+  optimization:
+    enabled: True
+    photometric_scale: 0.02 # lambda; TBD: exact value not reported in the COIN-BIEVR supplement

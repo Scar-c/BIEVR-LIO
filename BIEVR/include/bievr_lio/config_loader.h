@@ -209,6 +209,7 @@ inline void printConfigOverview(const Config& config) {
   os << "    downsample_res_m:   " << hc.intensity.sampling.downsample_resolution_m << "\n";
   os << "    weak_eigen_ratio:   " << hc.intensity.sampling.weak_eigen_ratio << "\n";
   os << "    normalize_eta:      " << yn(hc.intensity.sampling.normalize_eta) << "\n";
+  os << "    score_mode:         " << hc.intensity.sampling.score_mode << "\n";
   os << "  optimization:\n";
   os << "    enabled:            " << yn(hc.intensity.optimization_enabled) << "\n";
   os << "    photometric_scale:  " << hc.intensity.photometric_scale << "\n";
@@ -331,6 +332,8 @@ inline bool loadConfigFromYaml(const std::vector<std::string>& yaml_paths, Confi
       yaml.getNested<double>("intensity", "sampling.weak_eigen_ratio", samp.weak_eigen_ratio);
   samp.normalize_eta =
       yaml.getNested<bool>("intensity", "sampling.normalize_eta", samp.normalize_eta);
+  samp.score_mode = yaml.getNested<std::string>("intensity", "sampling.score_mode",
+                                                samp.score_mode);
 
   ic.optimization_enabled =
       yaml.getNested<bool>("intensity", "optimization.enabled", ic.optimization_enabled);

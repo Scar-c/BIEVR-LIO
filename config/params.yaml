@@ -15,10 +15,12 @@ preprocess:
 optimization:
   huber_delta: 0.1 # Huber norm threshold
 
-# COIN-BIEVR intensity channel (reproduction plan Section 39-40).
-# Values marked TBD are not specified in the COIN-BIEVR supplement.
+# COIN-BIEVR intensity channel. This default config is the BIEVR-safe baseline:
+# the master switch is OFF, so geometry/map/sampling/LM follow the original
+# BIEVR-LIO exactly (no intensity preprocessing, no intensity map, no photo LM).
+# To run COIN-BIEVR use config/params_coin_bievr.yaml (or override enabled: True).
 intensity:
-  enabled: True # Master switch. False = original BIEVR behaviour.
+  enabled: False # Master switch. False = original BIEVR behaviour.
 
   preprocessing:
     enabled: True
@@ -40,6 +42,7 @@ intensity:
     downsample_resolution_m: 0.1 # intensity point downsampling (paper)
     weak_eigen_ratio: 10.0 # eta switch 10*lambda1 > lambda2 (paper)
     normalize_eta: True # TBD (paper does not specify)
+    score_mode: "abs_components" # Eq.8 sign handling; "abs_components" (default) or "paper_signed"
 
   optimization:
     enabled: True

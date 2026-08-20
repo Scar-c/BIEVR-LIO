@@ -22,6 +22,14 @@ struct IntensitySamplingConfig {
   double downsample_resolution_m = 0.1;      // intensity point downsampling
   double weak_eigen_ratio = 10.0;            // eta switch: 10*lambda1 > lambda2
   bool normalize_eta = true;                 // normalize eta after construction
+  // Eq. (8) voxel contribution score:
+  //   "abs_components" (default): |eta_u|*iota_x + |eta_v|*iota_y
+  //   "paper_signed":            (eta_u*iota_x + eta_v*iota_y)
+  // abs_components removes the eigenvector sign ambiguity (v <-> -v) and
+  // follows the fabs-style directional contribution of COIN-LIO. The COIN-BIEVR
+  // supplement writes a signed dot product; the exact sign handling is not
+  // specified (Section 55 / second review Section 3).
+  std::string score_mode = "abs_components";
 };
 
 struct IntensitySampleSet {
@@ -47,11 +55,13 @@ Eigen::Vector3d estimateWeakGeometryDirection(const BIEVRMap& map,
                                               double weak_eigen_ratio, bool normalize_eta,
                                               Eigen::Vector3d* eigenvalues_out = nullptr);
 
-// Eq. (8): voxel contribution l_c = |(R_CW eta) . iota| using the voxel-local
-// intensity information vector. Returns (score, hash) pairs, unsorted.
-std::vector<std::pair<double, size_t>> scoreIntensityVoxels(const BIEVRMap& map,
-                                                            const std::vector<size_t>& observed_hashes,
-                                                            const Eigen::Vector3d& eta_W);
+// Eq. (8): voxel contribution l_c = (R_CW eta) . iota using the voxel-local
+// intensity information vector. `score_mode` selects "abs_components" (default,
+// eigenvector-sign-agnostic, follows COIN-LIO's fabs style) or "paper_signed"
+// (literal signed dot product). Returns (score, hash) pairs, unsorted.
+std::vector<std::pair<double, size_t>> scoreIntensityVoxels(
+    const BIEVRMap& map, const std::vector<size_t>& observed_hashes,
+    const Eigen::Vector3d& eta_W, const std::string& score_mode = "abs_components");
 
 // Selects the `num_voxels` highest-scoring voxels (partial sort).
 std::vector<size_t> selectTopIntensityVoxels(const std::vector<std::pair<double, size_t>>& scores,

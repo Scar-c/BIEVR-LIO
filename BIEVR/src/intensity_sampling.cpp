@@ -86,20 +86,29 @@ Eigen::Vector3d estimateWeakGeometryDirection(const BIEVRMap& map,
   return eta;
 }
 
-std::vector<std::pair<double, size_t>> scoreIntensityVoxels(const BIEVRMap& map,
-                                                            const std::vector<size_t>& observed_hashes,
-                                                            const Eigen::Vector3d& eta_W) {
+std::vector<std::pair<double, size_t>> scoreIntensityVoxels(
+    const BIEVRMap& map, const std::vector<size_t>& observed_hashes, const Eigen::Vector3d& eta_W,
+    const std::string& score_mode) {
   std::vector<std::pair<double, size_t>> scores;
   scores.reserve(observed_hashes.size());
+  const bool abs_components = (score_mode != "paper_signed");
   for (const size_t hash : observed_hashes) {
     const Voxel* voxel = map.getVoxel(hash);
     if (!voxel) continue;
     // Map eta into the voxel-local frame and project onto its uv plane.
     const Eigen::Vector2d eta_uv = (voxel->T_C_W_.linear() * eta_W).head<2>();
     const Eigen::Vector2d& iota = voxel->intensity_information_;
-    // Absolute directional contribution (eigenvector sign ambiguity, COIN-LIO
-    // uses fabs as well). COIN-BIEVR supplement does not specify exact sign.
-    const double score = std::abs(eta_uv.x()) * iota.x() + std::abs(eta_uv.y()) * iota.y();
+
+    double score;
+    if (abs_components) {
+      // COIN-BIEVR Eq. (8) is written as a signed dot product. We use
+      // component-wise absolute directional contribution to remove eigenvector
+      // sign ambiguity (v <-> -v), following the implementation style of
+      // COIN-LIO. The supplement does not specify the exact sign handling.
+      score = std::abs(eta_uv.x()) * iota.x() + std::abs(eta_uv.y()) * iota.y();
+    } else {
+      score = eta_uv.x() * iota.x() + eta_uv.y() * iota.y();
+    }
     scores.emplace_back(score, hash);
   }
   return scores;
@@ -202,7 +211,7 @@ IntensitySampleSet sampleIntensityPoints(const BIEVRMap& map, const Pointcloud& 
                                                         config.normalize_eta,
                                                         &result.weak_eigenvalues);
   const std::vector<std::pair<double, size_t>> scores =
-      scoreIntensityVoxels(map, observed_hashes, result.weak_direction);
+      scoreIntensityVoxels(map, observed_hashes, result.weak_direction, config.score_mode);
   result.selected_voxel_hashes = selectTopIntensityVoxels(scores, config.num_voxels);
   result.selected_voxels = result.selected_voxel_hashes.size();
   if (result.selected_voxel_hashes.empty()) return result;
