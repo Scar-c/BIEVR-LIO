@@ -23,6 +23,13 @@ struct IntensityConfig {
   bool optimization_enabled = true;
   // Photometric scale lambda. The COIN-BIEVR supplement does not give a value.
   double photometric_scale = 0.02;
+  // Round-5 photometric safety (engineering safeguards / TBD, not paper params):
+  //   shadow_diagnostics: compute photo residual/J/H/b diagnostics without
+  //     merging into the LM solve (C0 shadow run; never changes the trajectory).
+  //   photometric_warmup_s: photo residual enters the LM only after Running has
+  //     lasted this long.
+  bool shadow_diagnostics = false;
+  double photometric_warmup_s = 10.0;
 };
 
 class Pipeline {
@@ -48,6 +55,9 @@ class Pipeline {
     // validation). Empty = disabled. When set, writes <path>/... see
     // writeIntensityDiagnostics(). Diagnostics only; not part of the paper.
     std::string intensity_diagnostics_path = "";
+    // Optional per-frame photometric safety diagnostics CSV (round-5).
+    // Empty = disabled. Diagnostics only.
+    std::string photo_diagnostics_path = "";
 
     size_t min_points_for_map_init = 100;
     size_t map_size_running_threshold = 5;
@@ -93,6 +103,10 @@ class Pipeline {
   void writeIntensityDiagnostics(uint64_t stamp, const IntensityProcessingResult& result,
                                  const IntensitySampleSet& samples, double preprocess_ms);
 
+  // Writes one row per frame of the round-5 photometric safety diagnostics when
+  // config_.photo_diagnostics_path is non-empty and photo work is requested.
+  void writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiagnostics& diag);
+
   // State and optimization management
   bool addState(const uint64_t time, const Quaternion& quat, const V3& p, const V3& v);
   bool addImuIntegrator(ImuIntegratorPtr imu_integrator);
@@ -137,6 +151,11 @@ class Pipeline {
   // Optional per-frame intensity diagnostics CSV logger (debug config only).
   std::shared_ptr<std::ofstream> intensity_diag_csv_;
   std::shared_ptr<std::ofstream> intensity_hist_csv_;
+  // Optional per-frame photometric safety diagnostics CSV (round-5).
+  std::shared_ptr<std::ofstream> photo_diag_csv_;
+  // Stamp when the pipeline entered Phase::Running (used by the photometric
+  // warmup gate). 0 = not yet running.
+  uint64_t running_start_time_ = 0;
   V3 acc_bias_ = V3::Zero();
   V3 gyro_bias_ = V3::Zero();
   V3 gravity_dir_ = V3(0, 0, 1);

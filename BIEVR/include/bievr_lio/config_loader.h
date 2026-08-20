@@ -222,6 +222,8 @@ inline void printConfigOverview(const Config& config) {
   os << "  optimization:\n";
   os << "    enabled:            " << yn(hc.intensity.optimization_enabled) << "\n";
   os << "    photometric_scale:  " << hc.intensity.photometric_scale << "\n";
+  os << "    shadow_diagnostics: " << yn(hc.intensity.shadow_diagnostics) << "\n";
+  os << "    warmup_s:           " << hc.intensity.photometric_warmup_s << " (TBD safeguard)\n";
   os << "imu:\n";
   os << "  window_s:             " << hc.imu.window_length_s << "\n";
   os << "  t_init:               " << hc.imu.t_init << "\n";
@@ -239,6 +241,8 @@ inline void printConfigOverview(const Config& config) {
   os << "  log_path:             " << (hc.log_path.empty() ? "<none>" : hc.log_path) << "\n";
   os << "  intensity_diag_csv:   "
      << (hc.intensity_diagnostics_path.empty() ? "<none>" : hc.intensity_diagnostics_path) << "\n";
+  os << "  photo_diag_csv:       "
+     << (hc.photo_diagnostics_path.empty() ? "<none>" : hc.photo_diagnostics_path) << "\n";
   os << "calibration (LiDAR -> IMU):\n";
   printExtrinsic(os, "T_I_L", hc.T_I_L);
   os << "==================================================";
@@ -350,6 +354,11 @@ inline bool loadConfigFromYaml(const std::vector<std::string>& yaml_paths, Confi
       yaml.getNested<bool>("intensity", "optimization.enabled", ic.optimization_enabled);
   ic.photometric_scale = yaml.getNested<double>("intensity", "optimization.photometric_scale",
                                                 ic.photometric_scale);
+  // Round-5 photometric safety (engineering safeguards / TBD, not paper params).
+  ic.shadow_diagnostics =
+      yaml.getNested<bool>("intensity", "optimization.shadow_diagnostics", ic.shadow_diagnostics);
+  ic.photometric_warmup_s = yaml.getNested<double>("intensity", "optimization.photometric_warmup_s",
+                                                   ic.photometric_warmup_s);
 
   // --- imu (params side: inertial window + normalization) ---
   if (!config_internal::getPositive(yaml, "imu", "window_s", 10., hc.imu.window_length_s) ||
@@ -371,6 +380,8 @@ inline bool loadConfigFromYaml(const std::vector<std::string>& yaml_paths, Confi
   // validation). Empty = disabled.
   hc.intensity_diagnostics_path =
       yaml.get<std::string>("debug", "intensity_diagnostics_path", "");
+  // Optional per-frame photometric safety diagnostics CSV (round-5). Empty = disabled.
+  hc.photo_diagnostics_path = yaml.get<std::string>("debug", "photo_diagnostics_path", "");
 
   // --- dashboard (live status print) ---
   hc.print_dashboard = yaml.get<bool>("debug", "dashboard", false);

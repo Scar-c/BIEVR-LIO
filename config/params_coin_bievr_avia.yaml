@@ -61,8 +61,13 @@ intensity:
     score_mode: "abs_components" # Eq.8 sign handling; default abs_components (see code)
 
   optimization:
-    enabled: False # Round 4: photometric residual OFF (isolation experiment).
+    enabled: False # Round 4/5: photometric residual OFF for isolation/shadow.
     photometric_scale: 0.02 # lambda; TBD: exact value not reported in the COIN-BIEVR supplement
+    shadow_diagnostics: False # Round-5 C0 shadow run: compute photo residual/J/H/b
+    # diagnostics without merging into the LM (never changes the trajectory).
+    # Engineering safeguard / TBD, not a paper parameter.
+    photometric_warmup_s: 10.0 # Photo residual enters the LM only after Running
+    # has lasted this long. Engineering safeguard / TBD, not a paper parameter.
 
 imu:
     window_s: 10 # Time window for the inertial optimization [s]
@@ -75,8 +80,9 @@ debug:
   log: False
   dashboard: False # Round 4: dashboard off during sweeps (CSV logger used instead)
   dashboard_ascii_path: "" # ASCII art for the dashboard. Empty = bievr_ascii.txt next to the config.
-  trajectory_path: "" # Path to save trajectory (TUM). Empty = logs will not be saved.
-  intensity_diagnostics_path: "" # Path to save per-frame intensity diagnostics CSV.
+  trajectory_path: "" # Path to save trajectory (TUM). Empty = disabled.
+  intensity_diagnostics_path: "" # Empty = disabled.
+  photo_diagnostics_path: "" # Empty = disabled. Round-5 photometric safety CSV.
   # Empty = disabled. Only enabled for round-4 validation runs.
 
 max_num_threads: 0 # 0 = automatic, >0 = number of threads to use for parallel processing

@@ -128,6 +128,32 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
       intensity_hist_csv_.reset();
     }
   }
+
+  // Optional per-frame photometric safety diagnostics CSV (round-5).
+  if (!config_.photo_diagnostics_path.empty()) {
+    photo_diag_csv_ =
+        std::make_shared<std::ofstream>(config_.photo_diagnostics_path, std::ios::trunc);
+    if (photo_diag_csv_->is_open()) {
+      *photo_diag_csv_
+          << "stamp,candidates,valid_matches,immature_matches,match_ratio,"
+             "r_abs_p50,r_abs_p75,r_abs_p90,r_abs_p95,r_abs_max,r_signed_median,"
+             "grad_p50,grad_p75,grad_p90,grad_p95,"
+             "J_norm_p50,J_norm_p90,J_norm_p99,J_norm_max,"
+             "Jdof_p90_rx,Jdof_p90_ry,Jdof_p90_rz,Jdof_p90_tx,Jdof_p90_ty,Jdof_p90_tz,"
+             "H_geo_fro,H_photo_fro,H_photo_trace,b_geo_norm,b_photo_norm,"
+             "R_H_unscaled,R_b_unscaled,R_H_scaled,lambda_ref,"
+             "eig1,eig2,eig3,eig4,eig5,eig6,"
+             "photo_step_t_mm,photo_step_r_deg,"
+             "lm_iterations,lm_accepted,lm_rejected,reject_rate,"
+             "lm_initial_cost,lm_final_cost,geo_cost,photo_cost,"
+             "pose_delta_t_m,pose_delta_r_deg,photo_effective_residuals,"
+             "fd_samples,fd_median_rel_err,fd_p95_rel_err,fd_done,photometric_scale\n";
+    } else {
+      LOG(E, "Failed to open photometric diagnostics CSV at "
+                 << config_.photo_diagnostics_path);
+      photo_diag_csv_.reset();
+    }
+  }
 }
 
 void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
@@ -276,6 +302,17 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
       intensity_enabled && config_.intensity.optimization_enabled &&
       !intensity_samples.points.empty();
   reg_config.photometric_scale = config_.intensity.photometric_scale;
+  // Round-5 photometric safety (shadow diagnostics, warmup gate, maturity gate,
+  // optional real-map finite-difference Jacobian spot check).
+  reg_config.shadow_photometric =
+      intensity_enabled && config_.intensity.shadow_diagnostics &&
+      !intensity_samples.points.empty();
+  reg_config.photometric_warmup_s = config_.intensity.photometric_warmup_s;
+  reg_config.photometric_elapsed_s =
+      running_start_time_ > 0 ? nsToS(header.stamp - running_start_time_) : 0.0;
+  reg_config.photometric_fd_check =
+      intensity_enabled && config_.intensity.shadow_diagnostics &&
+      config_.intensity.optimization_enabled == false;
   // With the master switch off we use the geometry-only constructor so the
   // photometric source is never constructed / accumulated.
   LsqRegistration optimizer =
@@ -379,6 +416,11 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     writeIntensityDiagnostics(header.stamp, intensity_result, intensity_samples,
                               intensity_preprocess_ms);
   }
+
+  // Per-frame photometric safety diagnostics CSV (round-5, debug config only).
+  if (photo_diag_csv_ && (reg_config.photometric_residual || reg_config.shadow_photometric)) {
+    writePhotometricDiagnostics(header.stamp, optimizer.photometricDiagnostics());
+  }
 }
 
 void Pipeline::writeIntensityDiagnostics(uint64_t stamp, const IntensityProcessingResult& result,
@@ -410,6 +452,31 @@ void Pipeline::writeIntensityDiagnostics(uint64_t stamp, const IntensityProcessi
   for (int i = 0; i < 256; ++i) {
     *intensity_hist_csv_ << result.filtered_histogram[i] << (i < 255 ? "," : "\n");
   }
+}
+
+void Pipeline::writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiagnostics& d) {
+  if (!photo_diag_csv_) return;
+  *photo_diag_csv_ << stamp << "," << d.candidates << "," << d.valid_matches << ","
+                   << d.immature_matches << "," << d.match_ratio << "," << d.r_abs_p50 << ","
+                   << d.r_abs_p75 << "," << d.r_abs_p90 << "," << d.r_abs_p95 << ","
+                   << d.r_abs_max << "," << d.r_signed_median << "," << d.grad_p50 << ","
+                   << d.grad_p75 << "," << d.grad_p90 << "," << d.grad_p95 << ","
+                   << d.J_norm_p50 << "," << d.J_norm_p90 << "," << d.J_norm_p99 << ","
+                   << d.J_norm_max << "," << d.J_dof_p90[0] << "," << d.J_dof_p90[1] << ","
+                   << d.J_dof_p90[2] << "," << d.J_dof_p90[3] << "," << d.J_dof_p90[4] << ","
+                   << d.J_dof_p90[5] << "," << d.H_geo_fro << "," << d.H_photo_fro << ","
+                   << d.H_photo_trace << "," << d.b_geo_norm << "," << d.b_photo_norm << ","
+                   << d.R_H_unscaled << "," << d.R_b_unscaled << "," << d.R_H_scaled << ","
+                   << d.lambda_ref << "," << d.photo_eigenvalues(0) << "," << d.photo_eigenvalues(1)
+                   << "," << d.photo_eigenvalues(2) << "," << d.photo_eigenvalues(3) << ","
+                   << d.photo_eigenvalues(4) << "," << d.photo_eigenvalues(5) << ","
+                   << d.photo_step_translation_m * 1000.0 << "," << d.photo_step_rotation_deg << ","
+                   << d.lm_iterations << "," << d.lm_accepted << "," << d.lm_rejected << ","
+                   << d.reject_rate << "," << d.lm_initial_cost << "," << d.lm_final_cost << ","
+                   << d.geo_cost << "," << d.photo_cost << "," << d.pose_delta_translation_m << ","
+                   << d.pose_delta_rotation_deg << "," << d.photo_effective_residuals << ","
+                   << d.fd_samples << "," << d.fd_median_rel_err << "," << d.fd_p95_rel_err << ","
+                   << d.fd_done << "," << d.photometric_scale << "\n";
 }
 
 bool Pipeline::initializeBias(const std::vector<ImuMeasurement>& imu_data,
@@ -453,6 +520,7 @@ bool Pipeline::initializeBias(const std::vector<ImuMeasurement>& imu_data,
     }
     map_->integratePoints(T_W_I_init * pointcloud, &ranges);
     phase_ = Phase::Running;
+    running_start_time_ = imu_data.back().stamp;
   } else {
     // COIN-BIEVR: do NOT build a geometry-only map during bias init. Height and
     // intensity share the voxel weights (bump_weights_), so a geometry-only
@@ -480,6 +548,7 @@ void Pipeline::tryInitMap(uint64_t stamp, const State& x_j_pred, const Transform
   publish(IntensityPointcloud(registered, intensities), header, "points/registered");
   if (map_->size() > config_.map_size_running_threshold) {
     phase_ = Phase::Running;
+    running_start_time_ = stamp;
   }
 }
 
