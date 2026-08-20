@@ -9,9 +9,13 @@
 | Upstream repo | https://github.com/ethz-asl/BIEVR-LIO.git |
 | Baseline SHA | `21121698f273d6fbfffca57546b940edb1de2ff0` (`main`, "Merge pull request #5 from ethz-asl/feature/humble-ci") |
 | Branch | `coin_bievr` |
-| HEAD SHA | `e08613fd77254c00a568baf477d6fce967afed7b` |
+| Implementation HEAD before documentation commit | `ef42b03ff63f01bf7c1d44630f7ac1f500e9e3d1` |
 | Backup branch | `coin_bievr_backup_before_rebase` @ `80c3a9f` (pre-reorganization full-state WIP commit, keeps the entire implementation in one place) |
 | Rebased from | clean `main` at baseline SHA |
+
+> Round 1 (commits 1-11, reviewed HEAD `5e93707`) covers the initial COIN-BIEVR
+> implementation. Round 2 (commits 12-16, this document's Implementation HEAD)
+> contains the second-review correctness fixes; see Section 7b below.
 
 ## 2. Commit Table
 
@@ -29,6 +33,54 @@
 | 8 | `7dd2a6f` | 7dd2a6f | feat(pipeline): integrate the COIN-BIEVR intensity pipeline | paper Fig. 2 flow; plan §35-37, §41-42 |
 | 9 | `f615cf8` | f615cf8 | feat(config): intensity configuration block + regression switch | plan §39-40 |
 | 10 | `e08613f` | e08613f | test: unit tests for the COIN-BIEVR modules | plan §43-48 |
+
+Round 2 commits (second review fixes, appended on top of the reviewed HEAD):
+
+| # | Commit | SHA | Subject |
+|---|---|---|---|
+| 12 | `98fa2e2` | 98fa2e2 | fix(intensity): normalize all projected points across pixel collisions |
+| 13 | `6cc967a` | 6cc967a | fix(intensity): make preprocessing bypass preserve point alignment |
+| 14 | `fe51c0c` | fe51c0c | fix(map): reject misaligned intensity updates; zero intensity work when disabled |
+| 15 | `0e9093a` | 0e9093a | config: separate BIEVR baseline and COIN-BIEVR presets; Eq.8 score mode |
+| 16 | `ef42b03` | ef42b03 | test(intensity): cover collisions, bypass, misaligned, sign invariance, disabled |
+
+## 7b. Second Review Round (round-2 fixes)
+
+See `COIN_BIEVR_SECOND_REVIEW_FIX_PLAN.md` for the review specification.
+
+**P1 - projection collision (commit 12).** When several 3D points land in the
+same spherical image pixel, only the nearest owner used to get the normalized
+I_F; the losers kept their raw sensor-domain intensity, mixing normalized and
+raw values into the voxel intensity map and the photometric residual. Fix: the
+processor returns an `IntensityProcessingResult` with a per-point `point_pixel_idx`;
+after sparse brightness normalization, `I_F(v_i,u_i)` is back-assigned to EVERY
+successfully projected point, so all points sharing a pixel stay in the
+normalized `[0,255]` domain while the image keeps its nearest-point owner
+semantics (full-cloud map update is preserved, no points dropped).
+`projectPoint()` abstracts the point->pixel projection (future Ouster LUT) and
+clamps the elevation into the FOV so every finite point stays valid.
+
+**P1 - preprocessing bypass (commit 13).** `preprocessing.enabled=false` no
+longer returns an empty intensity row; it runs a debug/ablation bypass
+(`clamp(raw * raw_scale)`) that keeps the point/intensity index alignment.
+Not the paper default.
+
+**P1 - map defensive rejection (commit 14).** `integratePoints()` rejects a
+size-mismatched intensity row (assert in debug, warning + skip in release) and
+never falls back to intensity=0 merged into the map.
+
+**P2 - disabled zero path (commit 14).** `BIEVRMap::Config::intensity_enabled`
+gates all voxel intensity work (allocation, reprojection, information update);
+with `intensity.enabled=false` the pipeline also skips preprocessing, sampling
+and the photometric LM (geometry-only LsqRegistration constructor), so runtime
+and memory follow the original BIEVR path.
+
+**P2 - config presets (commit 15).** `config/params.yaml` defaults to
+`intensity.enabled: false` (BIEVR-safe baseline); the COIN-BIEVR preset is
+`config/params_coin_bievr.yaml`. Eq. (8) score is configurable via
+`score_mode` ("abs_components" default / "paper_signed").
+
+**Tests.** Extended from 6 to 12 (see Section 6b).
 
 ## 3. Per-commit Changed Files
 
@@ -81,8 +133,9 @@
 
 ## 4. Diff Overview
 
-`git diff --stat 2112169..HEAD` — 21 files, +1981 / -82.
-`git diff --name-status 2112169..HEAD` — 4 new headers/sources (intensity_processor, intensity_sampling), 6 new tests, 11 modified.
+`git diff --stat 2112169..HEAD` — 29 files, +2863 / -83.
+`git diff --name-status 2112169..HEAD` — 6 new headers/sources (intensity_processor,
+intensity_sampling), 12 tests (6 new), 13 modified + config preset.
 
 ## 5. Build Status
 
@@ -94,7 +147,9 @@
 
 ## 6. Test Status
 
-CTest (`-DBIEVR_BUILD_TESTS=ON`): **6/6 pass**
+CTest (`-DBIEVR_BUILD_TESTS=ON`): **12/12 pass**
+
+Round-1 tests (6/6):
 
 | Test | Verifies |
 |---|---|
@@ -105,26 +160,48 @@ CTest (`-DBIEVR_BUILD_TESTS=ON`): **6/6 pass**
 | test_intensity_gradient | Eq. 6 iota direction per gradient pattern (plan §47) |
 | test_photometric_jacobian | analytic photometric Jacobian vs 6-DOF finite difference (plan §48) |
 
+Round-2 tests (6 new, second review Section 16):
+
+| Test | Verifies |
+|---|---|
+| test_projection_collision | collision losers also receive the normalized I_F (no raw leak) |
+| test_full_cloud_preservation | filtered size == N and map integrates all N points under collisions |
+| test_preprocessing_bypass | preprocessing.enabled=false returns aligned, non-empty clamp(raw*scale) |
+| test_misaligned_intensity | size-mismatched intensity rejected; map not contaminated |
+| test_score_sign_invariance | Eq.8 abs_components score invariant to eigenvector sign |
+| test_intensity_disabled | intensity raster never allocated / info never computed when disabled |
+
 ## 7. intensity.enabled=false Regression Status
 
 `intensity.enabled: false` must reproduce original BIEVR geometry/map/sampling/LM.
 
 **By construction (verified at code-path level):**
-- `pipeline.cpp`: with `intensity.enabled == false`, no intensity sampling is run,
-  `photometric_residual` is forced false, and the map update passes
-  `intensities = nullptr`.
-- `bievr_map.cpp`: `integratePoints(..., nullptr)` leaves `intensity_img_` untouched
-  (stays all-zero); geometry hashing/grouping/normal/bump-image math is unchanged
-  (commit 1 is a pure internal representation refactor `Vector4d -> MapPoint`,
-  identical arithmetic).
+- `pipeline.cpp`: with `intensity.enabled == false`, no intensity preprocessing is
+  run, no intensity sampling is run, `photometric_residual` is forced false, the
+  geometry-only LsqRegistration constructor is used (no photometric source /
+  accumulator), and the map update passes `intensities = nullptr`.
+- `bievr_map.cpp`: with `config_.intensity_enabled == false` the voxel never
+  allocates/updates/reprojects the intensity raster and never computes intensity
+  information (round-2 fix, commit 14); geometry hashing/grouping/normal/bump-
+  image math is unchanged (commit 1 is a pure internal representation refactor
+  `Vector4d -> MapPoint`, identical arithmetic).
 - `ls_optimizer.cpp`: `photometric_residual == false` runs only the original
   geometry linearization; the joint merge reduces to the geometry-only result.
 - Geometry sampling (`sampleSource`) is untouched.
+- Verified by unit test `test_intensity_disabled` (raster never allocated, info
+  never computed while disabled) and the original geometry tests still passing
+  with the switch off.
+
+**Residual static overhead when disabled (documented, negligible):** `Voxel`
+gains an empty `intensity_img_` (MatrixXf header, no allocation) and a
+`Vector2d intensity_information_` (16 B/voxel); `MapPoint` gains one `float`
+(4 B) per pending point. No dynamic intensity allocation occurs when disabled.
 
 **Not yet verified on real data:** a runtime A/B trajectory regression
-(pose-by-pose diff / ATE) requires a recorded dataset, which is not available in
-this environment. Recommended: run the same bag with `intensity.enabled: true/false`
-and diff the TUM trajectories (plan §4 Definition of Done).
+(pose-by-pose diff / ATE, and RSS/peak-memory comparison) requires a recorded
+dataset, which is not available in this environment. Recommended: run the same
+bag with `intensity.enabled: true/false` and diff the TUM trajectories
+(plan §4 Definition of Done / second review Stage B).
 
 ## 8. Implemented Items (paper Eq. mapping)
 
