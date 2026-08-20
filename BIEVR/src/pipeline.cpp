@@ -147,7 +147,15 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
              "lm_iterations,lm_accepted,lm_rejected,reject_rate,"
              "lm_initial_cost,lm_final_cost,geo_cost,photo_cost,"
              "pose_delta_t_m,pose_delta_r_deg,photo_effective_residuals,"
-             "fd_samples,fd_median_rel_err,fd_p95_rel_err,fd_done,photometric_scale\n";
+             "fd_samples,fd_median_rel_err,fd_p95_rel_err,fd_done,photometric_scale,"
+             "fd_level_a_samples,fd_level_a_median,fd_level_a_p95,fd_level_a_sign,"
+             "fd_level_b_points,fd_level_b_scalars,fd_level_b_median,fd_level_b_p95,fd_level_b_sign,"
+             "fd_b_rx_med,fd_b_rx_p95,fd_b_ry_med,fd_b_ry_p95,fd_b_rz_med,fd_b_rz_p95,"
+             "fd_b_tx_med,fd_b_tx_p95,fd_b_ty_med,fd_b_ty_p95,fd_b_tz_med,fd_b_tz_p95,"
+             "fd_b_analytic_p50,fd_b_analytic_p90,fd_b_analytic_p99,"
+             "fd_b_numeric_p50,fd_b_numeric_p90,fd_b_numeric_p99,"
+             "fd_c_voxel_switch,fd_c_cell_switch,fd_c_validity_switch,"
+             "fd_c_noswitch_samples,fd_c_noswitch_median,fd_c_noswitch_p95\n";
     } else {
       LOG(E, "Failed to open photometric diagnostics CSV at "
                  << config_.photo_diagnostics_path);
@@ -476,7 +484,22 @@ void Pipeline::writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiag
                    << d.geo_cost << "," << d.photo_cost << "," << d.pose_delta_translation_m << ","
                    << d.pose_delta_rotation_deg << "," << d.photo_effective_residuals << ","
                    << d.fd_samples << "," << d.fd_median_rel_err << "," << d.fd_p95_rel_err << ","
-                   << d.fd_done << "," << d.photometric_scale << "\n";
+                   << d.fd_done << "," << d.photometric_scale << "," << d.fd_level_a_samples << ","
+                   << d.fd_level_a_median << "," << d.fd_level_a_p95 << "," << d.fd_level_a_sign
+                   << "," << d.fd_level_b_points << "," << d.fd_level_b_scalars << ","
+                   << d.fd_level_b_median << "," << d.fd_level_b_p95 << "," << d.fd_level_b_sign
+                   << "," << d.fd_level_b_rx_median << "," << d.fd_level_b_rx_p95 << ","
+                   << d.fd_level_b_ry_median << "," << d.fd_level_b_ry_p95 << ","
+                   << d.fd_level_b_rz_median << "," << d.fd_level_b_rz_p95 << ","
+                   << d.fd_level_b_tx_median << "," << d.fd_level_b_tx_p95 << ","
+                   << d.fd_level_b_ty_median << "," << d.fd_level_b_ty_p95 << ","
+                   << d.fd_level_b_tz_median << "," << d.fd_level_b_tz_p95 << ","
+                   << d.fd_level_b_analytic_p50 << "," << d.fd_level_b_analytic_p90 << ","
+                   << d.fd_level_b_analytic_p99 << "," << d.fd_level_b_numeric_p50 << ","
+                   << d.fd_level_b_numeric_p90 << "," << d.fd_level_b_numeric_p99 << ","
+                   << d.fd_level_c_voxel_switch << "," << d.fd_level_c_cell_switch << ","
+                   << d.fd_level_c_validity_switch << "," << d.fd_level_c_noswitch_samples << ","
+                   << d.fd_level_c_noswitch_median << "," << d.fd_level_c_noswitch_p95 << "\n";
 }
 
 bool Pipeline::initializeBias(const std::vector<ImuMeasurement>& imu_data,

@@ -90,6 +90,26 @@ struct PhotometricDiagnostics {
   int fd_samples = 0;
   double fd_median_rel_err = 0.0, fd_p95_rel_err = 0.0;
   bool fd_done = false;
+  // Round-6 three-level derivative validation.
+  // Level A: image-space derivative (real map).
+  int fd_level_a_samples = 0;
+  double fd_level_a_median = 0.0, fd_level_a_p95 = 0.0, fd_level_a_sign = 0.0;
+  // Level B: fixed-correspondence 6-DOF pose Jacobian.
+  int fd_level_b_points = 0, fd_level_b_scalars = 0;
+  double fd_level_b_median = 0.0, fd_level_b_p95 = 0.0, fd_level_b_sign = 0.0;
+  double fd_level_b_rx_median = 0.0, fd_level_b_rx_p95 = 0.0, fd_level_b_rx_sign = 0.0;
+  double fd_level_b_ry_median = 0.0, fd_level_b_ry_p95 = 0.0, fd_level_b_ry_sign = 0.0;
+  double fd_level_b_rz_median = 0.0, fd_level_b_rz_p95 = 0.0, fd_level_b_rz_sign = 0.0;
+  double fd_level_b_tx_median = 0.0, fd_level_b_tx_p95 = 0.0, fd_level_b_tx_sign = 0.0;
+  double fd_level_b_ty_median = 0.0, fd_level_b_ty_p95 = 0.0, fd_level_b_ty_sign = 0.0;
+  double fd_level_b_tz_median = 0.0, fd_level_b_tz_p95 = 0.0, fd_level_b_tz_sign = 0.0;
+  double fd_level_b_analytic_p50 = 0.0, fd_level_b_analytic_p90 = 0.0, fd_level_b_analytic_p99 = 0.0;
+  double fd_level_b_numeric_p50 = 0.0, fd_level_b_numeric_p90 = 0.0, fd_level_b_numeric_p99 = 0.0;
+  // Level C: full-lookup switching (diagnostic only).
+  double fd_level_c_voxel_switch = 0.0, fd_level_c_cell_switch = 0.0;
+  double fd_level_c_validity_switch = 0.0;
+  int fd_level_c_noswitch_samples = 0;
+  double fd_level_c_noswitch_median = 0.0, fd_level_c_noswitch_p95 = 0.0;
 };
 
 // Bilinear sample of `image` at subpixel (x, y). `weights` acts as the
@@ -252,6 +272,85 @@ inline bool sampleIntensityValueAndGradient(const Voxel* voxel, const double x, 
                                      dIdx, dIdy);
 }
 
+// ---------------------------------------------------------------------------
+// Round-6 exact photometric sampler (COIN-BIEVR photometric residual only).
+//
+// The residual value AND the intensity gradient come from the SAME masked
+// normalized bilinear interpolation:
+//   I(x,y) = (sum m_k w_k I_k) / (sum m_k w_k),   m_k = (bump_weights_ > 0)
+// and the gradient is the EXACT derivative of that interpolation (quotient
+// rule), NOT a central difference. Units are intensity per pixel.
+//
+// This does NOT change the geometry height gradient (sampleValueAndGradient)
+// nor the Eq.6 intensity-information central difference.
+// ---------------------------------------------------------------------------
+struct IntensitySample {
+  bool valid = false;
+  double value = 0.0;
+  // dI/dx_pixel, dI/dy_pixel (pixel units)
+  Eigen::Vector2d gradient_pixel = Eigen::Vector2d::Zero();
+  int x0 = 0, y0 = 0;
+  double frac_x = 0.0, frac_y = 0.0;  // a = x - x0, b = y - y0
+  double valid_weight_sum = 0.0;      // S = sum m_k w_k
+};
+
+inline bool sampleIntensityBilinearWithGradient(const Voxel* voxel, double x, double y,
+                                                IntensitySample& out) {
+  const int x0 = std::floor(x);
+  const int y0 = std::floor(y);
+  const int x1 = x0 + 1;
+  const int y1 = y0 + 1;
+  const int max_x = voxel->intensity_img_.cols() - 1;
+  const int max_y = voxel->intensity_img_.rows() - 1;
+  if (x0 < 0 || y0 < 0 || x1 > max_x || y1 > max_y) return false;
+
+  const double a = x - x0;
+  const double b = y - y0;
+  const double a1 = 1.0 - a;
+  const double b1 = 1.0 - b;
+
+  // Validity comes from the shared voxel weight (bump_weights_ > 0). A valid
+  // intensity value of exactly 0 is still a valid measurement.
+  const auto& I = voxel->intensity_img_;
+  const auto& W = voxel->bump_weights_;
+  const double m00 = W(y0, x0) > 0 ? 1.0 : 0.0;
+  const double m10 = W(y0, x1) > 0 ? 1.0 : 0.0;
+  const double m01 = W(y1, x0) > 0 ? 1.0 : 0.0;
+  const double m11 = W(y1, x1) > 0 ? 1.0 : 0.0;
+
+  // Geometry bilinear weights.
+  const double w00 = a1 * b1, w10 = a * b1, w01 = a1 * b, w11 = a * b;
+  const double S = m00 * w00 + m10 * w10 + m01 * w01 + m11 * w11;
+  if (S <= 1e-12) return false;  // no valid corner: sample invalid
+
+  const double I00 = I(y0, x0), I10 = I(y0, x1), I01 = I(y1, x0), I11 = I(y1, x1);
+  const double N = m00 * w00 * I00 + m10 * w10 * I10 + m01 * w01 * I01 + m11 * w11 * I11;
+  out.value = N / S;
+
+  // Exact derivatives (quotient rule) w.r.t. a (= x in pixels, da/dx = 1):
+  //   dw00/da = -(1-b), dw10/da = (1-b), dw01/da = -b, dw11/da = b
+  const double dw00_da = -b1, dw10_da = b1, dw01_da = -b, dw11_da = b;
+  const double Nx = m00 * dw00_da * I00 + m10 * dw10_da * I10 + m01 * dw01_da * I01 +
+                    m11 * dw11_da * I11;
+  const double Sx = m00 * dw00_da + m10 * dw10_da + m01 * dw01_da + m11 * dw11_da;
+  out.gradient_pixel.x() = (Nx * S - N * Sx) / (S * S);
+
+  //   dw00/db = -(1-a), dw10/db = -a, dw01/db = (1-a), dw11/db = a
+  const double dw00_db = -a1, dw10_db = -a, dw01_db = a1, dw11_db = a;
+  const double Ny = m00 * dw00_db * I00 + m10 * dw10_db * I10 + m01 * dw01_db * I01 +
+                    m11 * dw11_db * I11;
+  const double Sy = m00 * dw00_db + m10 * dw10_db + m01 * dw01_db + m11 * dw11_db;
+  out.gradient_pixel.y() = (Ny * S - N * Sy) / (S * S);
+
+  out.x0 = x0;
+  out.y0 = y0;
+  out.frac_x = a;
+  out.frac_y = b;
+  out.valid_weight_sum = S;
+  out.valid = true;
+  return true;
+}
+
 struct Accumulator {
   int count = 0;
   double error_sum = 0.0;
@@ -354,7 +453,12 @@ class LsqRegistration {
   // finite-difference Jacobian spot check.
   void finalizePhotoDiagnostics(const Transform& T_W_L, const Accumulator& geo_acc,
                                 const Accumulator& photo_acc);
-  void runPhotoFdCheck(const Transform& T_W_L);
+  void runPhotoFdDiagnostics(const Transform& T_W_L);
+  // Round-6 three-level derivative FD (image-space / fixed-correspondence /
+  // full-lookup switching). Accumulates pools across frames.
+  void runLevelAFd(const Transform& T_W_L);
+  void runLevelBFd(const Transform& T_W_L);
+  void runLevelCFd(const Transform& T_W_L);
 
   // Per-match sample collected by the final photometric linearization.
   struct PhotoSample {
@@ -382,9 +486,21 @@ class LsqRegistration {
   double geometry_rmse_ = 0.0;
   double photometric_rmse_ = 0.0;
   PhotometricDiagnostics photo_diag_;
-  std::vector<double> fd_rel_errors_;  // pooled FD relative errors across frames
   Accumulator final_geo_acc_;   // final-pose geometry accumulator (round-5 diag)
   Accumulator final_photo_acc_; // final-pose photometric accumulator (round-5 diag)
+  // Round-6 FD pools. STATIC because the pipeline constructs a fresh optimizer
+  // every frame; the pools must persist across frames (single-process,
+  // sequential odometry node) until the sample targets are reached.
+  static std::vector<double> fd_a_errors_;
+  static long fd_a_sign_agree_, fd_a_sign_total_;
+  static std::vector<double> fd_b_errors_;
+  static std::vector<double> fd_b_errors_dof_[6];
+  static std::vector<double> fd_b_analytic_[6], fd_b_numeric_[6];
+  static long fd_b_sign_agree_[6], fd_b_sign_total_[6];
+  static long fd_b_points_;
+  static long fd_c_total_pert_, fd_c_voxel_switch_, fd_c_cell_switch_, fd_c_validity_switch_;
+  static std::vector<double> fd_c_noswitch_errors_;
+  static bool first_frame_;  // reset the static pools on the first frame
 };
 
 }  // namespace bievr

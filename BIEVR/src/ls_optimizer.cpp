@@ -73,6 +73,24 @@ LsqRegistration::LsqRegistration(const BIEVRMap& map, const Pointcloud& geometry
       intensity_points_j_(intensity_source),
       intensity_values_j_(intensity_values) {}
 
+// Round-6 static FD pools (persist across per-frame optimizer instances).
+std::vector<double> LsqRegistration::fd_a_errors_;
+long LsqRegistration::fd_a_sign_agree_ = 0;
+long LsqRegistration::fd_a_sign_total_ = 0;
+std::vector<double> LsqRegistration::fd_b_errors_;
+std::vector<double> LsqRegistration::fd_b_errors_dof_[6];
+std::vector<double> LsqRegistration::fd_b_analytic_[6];
+std::vector<double> LsqRegistration::fd_b_numeric_[6];
+long LsqRegistration::fd_b_sign_agree_[6] = {0, 0, 0, 0, 0, 0};
+long LsqRegistration::fd_b_sign_total_[6] = {0, 0, 0, 0, 0, 0};
+long LsqRegistration::fd_b_points_ = 0;
+long LsqRegistration::fd_c_total_pert_ = 0;
+long LsqRegistration::fd_c_voxel_switch_ = 0;
+long LsqRegistration::fd_c_cell_switch_ = 0;
+long LsqRegistration::fd_c_validity_switch_ = 0;
+std::vector<double> LsqRegistration::fd_c_noswitch_errors_;
+bool LsqRegistration::first_frame_ = true;
+
 Transform LsqRegistration::computeTransformation(const Transform& T_W_L_init) {
   Transform x0 = T_W_L_init;
 
@@ -96,6 +114,23 @@ Transform LsqRegistration::computeTransformation(const Transform& T_W_L_init) {
   photo_diag_ = PhotometricDiagnostics();
   photo_diag_.photometric_scale = config_.photometric_scale;
   photo_samples_.clear();
+  // Round-6 FD pools accumulate across frames (targets: Level A >= 1000 scalar
+  // derivatives, Level B >= 300 points); they are NOT reset per frame.
+  if (first_frame_ || !config_.photometric_fd_check) {
+    fd_a_errors_.clear();
+    fd_a_sign_agree_ = fd_a_sign_total_ = 0;
+    for (int k = 0; k < 6; ++k) {
+      fd_b_errors_dof_[k].clear();
+      fd_b_analytic_[k].clear();
+      fd_b_numeric_[k].clear();
+      fd_b_sign_agree_[k] = fd_b_sign_total_[k] = 0;
+    }
+    fd_b_errors_.clear();
+    fd_b_points_ = 0;
+    fd_c_total_pert_ = fd_c_voxel_switch_ = fd_c_cell_switch_ = fd_c_validity_switch_ = 0;
+    fd_c_noswitch_errors_.clear();
+    first_frame_ = false;
+  }
 
   const bool photo_requested = config_.photometric_residual || config_.shadow_photometric;
   const bool photo_active =
@@ -154,8 +189,8 @@ Transform LsqRegistration::computeTransformation(const Transform& T_W_L_init) {
     const double y_final = linearize(x0, &H, &b, /*collect_photo_stats=*/true);
     photo_diag_.lm_final_cost = y_final;
     finalizePhotoDiagnostics(x0, final_geo_acc_, final_photo_acc_);
-    if (config_.photometric_fd_check && !photo_diag_.fd_done) {
-      runPhotoFdCheck(x0);
+    if (config_.photometric_fd_check) {
+      runPhotoFdDiagnostics(x0);
     }
   }
 
@@ -304,24 +339,24 @@ double LsqRegistration::linearizePhotometric(const Transform& T_W_L, bool comput
       }
 
       const double I_i = intensity_values_j_(0, i);
-      double I_P = 0.0;
+      IntensitySample isample;
+      if (!sampleIntensityBilinearWithGradient(voxel, x, y, isample)) continue;
+      const double I_P = isample.value;
       if (!compute_jacobians) {
-        if (!getSubPixelIntensityValue(voxel, x, y, I_P)) continue;
         const double r = lambda * (I_i - I_P);
         acc.add(r, nullptr);
         continue;
       }
-
-      double dIdu = 0.0, dIdv = 0.0;
-      if (!sampleIntensityValueAndGradient(voxel, x, y, I_P, dIdu, dIdv)) continue;
 
       Eigen::Matrix<double, 3, 6> SE3_Jac;
       SE3_Jac.block<3, 3>(0, 3) = T_C_W.linear() * T_W_L.linear();
       SE3_Jac.block<3, 3>(0, 0).noalias() =
           -SE3_Jac.block<3, 3>(0, 3) * intensity_skew_points_j_[i];
 
+      // Exact masked-bilinear photometric gradient (intensity per pixel),
+      // converted to per meter by the projection chain rule (inv_size).
       Eigen::RowVector2d photo_grad;
-      photo_grad << dIdu, dIdv;
+      photo_grad << isample.gradient_pixel.x(), isample.gradient_pixel.y();
       photo_grad *= inv_size;
       Row6 J_photo = -(photo_grad * SE3_Jac.topRows<2>());
 
@@ -330,13 +365,13 @@ double LsqRegistration::linearizePhotometric(const Transform& T_W_L, bool comput
       acc.add(r, &J_scaled);
 
       ++photo_diag_.valid_matches;
-      PhotoSample sample;
-      sample.p_j = intensity_points_j_[i];
-      sample.I_i = I_i;
-      sample.r = I_i - I_P;
-      sample.J = J_photo;
-      sample.grad_norm = photo_grad.norm();
-      photo_samples_.push_back(sample);
+      PhotoSample psample;
+      psample.p_j = intensity_points_j_[i];
+      psample.I_i = I_i;
+      psample.r = I_i - I_P;
+      psample.J = J_photo;
+      psample.grad_norm = photo_grad.norm();
+      photo_samples_.push_back(psample);
     }
     return acc.error_sum;
   }
@@ -371,28 +406,25 @@ double LsqRegistration::linearizePhotometric(const Transform& T_W_L, bool comput
           }
 
           const double I_i = intensity_values_j_(0, i);
-
-          double I_P = 0.0;
+          IntensitySample sample;
+          if (!sampleIntensityBilinearWithGradient(voxel, x, y, sample)) continue;
+          const double I_P = sample.value;
           if (!compute_jacobians) {
-            if (!getSubPixelIntensityValue(voxel, x, y, I_P)) continue;
             const double r = lambda * (I_i - I_P);
             local_acc.add(r, nullptr);
             continue;
           }
-
-          double dIdu = 0.0;
-          double dIdv = 0.0;
-          if (!sampleIntensityValueAndGradient(voxel, x, y, I_P, dIdu, dIdv)) continue;
 
           Eigen::Matrix<double, 3, 6> SE3_Jac;
           SE3_Jac.block<3, 3>(0, 3) = T_C_W.linear() * T_W_L.linear();
           SE3_Jac.block<3, 3>(0, 0).noalias() =
               -SE3_Jac.block<3, 3>(0, 3) * intensity_skew_points_j_[i];
 
-          // Photometric Jacobian: -grad(I_P) * d(u,v)/d(xi). There is no z term
-          // (the intensity residual does not involve p_o.z()).
+          // Exact masked-bilinear photometric gradient (intensity per pixel),
+          // converted to per meter by the projection chain rule (inv_size).
           Eigen::RowVector2d photo_grad;
-          photo_grad << dIdu, dIdv;
+          photo_grad << sample.gradient_pixel.x(), sample.gradient_pixel.y();
+          photo_grad *= inv_size;
           photo_grad *= inv_size;
           Row6 J_photo = -(photo_grad * SE3_Jac.topRows<2>());
 
@@ -604,78 +636,322 @@ void LsqRegistration::finalizePhotoDiagnostics(const Transform& T_W_L,
   }
 }
 
-void LsqRegistration::runPhotoFdCheck(const Transform& T_W_L) {
-  if (photo_samples_.empty()) return;
+void LsqRegistration::runPhotoFdDiagnostics(const Transform& T_W_L) {
+  // Targets: Level A >= 1000 scalar derivatives, Level B >= 300 points.
+  runLevelAFd(T_W_L);
+  runLevelBFd(T_W_L);
+  runLevelCFd(T_W_L);
 
-  // Sample up to 40 random mature matches for the spot check.
+  // Publish the pooled Level A/B/C summaries once targets are reached.
+  if (static_cast<long>(fd_a_errors_.size()) >= 1000) {
+    std::sort(fd_a_errors_.begin(), fd_a_errors_.end());
+    photo_diag_.fd_level_a_samples = static_cast<int>(fd_a_errors_.size());
+    photo_diag_.fd_level_a_median = quantileSorted(fd_a_errors_, 0.50);
+    photo_diag_.fd_level_a_p95 = quantileSorted(fd_a_errors_, 0.95);
+    photo_diag_.fd_level_a_sign = fd_a_sign_total_ > 0
+                                      ? 100.0 * fd_a_sign_agree_ / fd_a_sign_total_
+                                      : 0.0;
+  }
+  if (fd_b_points_ >= 300) {
+    photo_diag_.fd_level_b_points = static_cast<int>(fd_b_points_);
+    photo_diag_.fd_level_b_scalars = static_cast<int>(fd_b_errors_.size());
+    std::sort(fd_b_errors_.begin(), fd_b_errors_.end());
+    photo_diag_.fd_level_b_median = quantileSorted(fd_b_errors_, 0.50);
+    photo_diag_.fd_level_b_p95 = quantileSorted(fd_b_errors_, 0.95);
+    long sign_agree = 0, sign_total = 0;
+    for (int k = 0; k < 6; ++k) {
+      sign_agree += fd_b_sign_agree_[k];
+      sign_total += fd_b_sign_total_[k];
+    }
+    photo_diag_.fd_level_b_sign =
+        sign_total > 0 ? 100.0 * sign_agree / sign_total : 0.0;
+    const char* dof_names[6] = {"rx", "ry", "rz", "tx", "ty", "tz"};
+    double* med[6] = {&photo_diag_.fd_level_b_rx_median, &photo_diag_.fd_level_b_ry_median,
+                      &photo_diag_.fd_level_b_rz_median, &photo_diag_.fd_level_b_tx_median,
+                      &photo_diag_.fd_level_b_ty_median, &photo_diag_.fd_level_b_tz_median};
+    double* p95[6] = {&photo_diag_.fd_level_b_rx_p95, &photo_diag_.fd_level_b_ry_p95,
+                      &photo_diag_.fd_level_b_rz_p95, &photo_diag_.fd_level_b_tx_p95,
+                      &photo_diag_.fd_level_b_ty_p95, &photo_diag_.fd_level_b_tz_p95};
+    double* sign[6] = {&photo_diag_.fd_level_b_rx_sign, &photo_diag_.fd_level_b_ry_sign,
+                       &photo_diag_.fd_level_b_rz_sign, &photo_diag_.fd_level_b_tx_sign,
+                       &photo_diag_.fd_level_b_ty_sign, &photo_diag_.fd_level_b_tz_sign};
+    for (int k = 0; k < 6; ++k) {
+      auto& v = fd_b_errors_dof_[k];
+      std::sort(v.begin(), v.end());
+      *med[k] = quantileSorted(v, 0.50);
+      *p95[k] = quantileSorted(v, 0.95);
+      *sign[k] = fd_b_sign_total_[k] > 0 ? 100.0 * fd_b_sign_agree_[k] / fd_b_sign_total_[k] : 0.0;
+    }
+    // Analytic / numeric J magnitude pools.
+    std::vector<double> an, nu;
+    for (int k = 0; k < 6; ++k) {
+      an.insert(an.end(), fd_b_analytic_[k].begin(), fd_b_analytic_[k].end());
+      nu.insert(nu.end(), fd_b_numeric_[k].begin(), fd_b_numeric_[k].end());
+    }
+    std::sort(an.begin(), an.end());
+    std::sort(nu.begin(), nu.end());
+    photo_diag_.fd_level_b_analytic_p50 = quantileSorted(an, 0.50);
+    photo_diag_.fd_level_b_analytic_p90 = quantileSorted(an, 0.90);
+    photo_diag_.fd_level_b_analytic_p99 = quantileSorted(an, 0.99);
+    photo_diag_.fd_level_b_numeric_p50 = quantileSorted(nu, 0.50);
+    photo_diag_.fd_level_b_numeric_p90 = quantileSorted(nu, 0.90);
+    photo_diag_.fd_level_b_numeric_p99 = quantileSorted(nu, 0.99);
+  }
+  if (fd_c_total_pert_ > 0) {
+    photo_diag_.fd_level_c_voxel_switch =
+        100.0 * fd_c_voxel_switch_ / fd_c_total_pert_;
+    photo_diag_.fd_level_c_cell_switch = 100.0 * fd_c_cell_switch_ / fd_c_total_pert_;
+    photo_diag_.fd_level_c_validity_switch =
+        100.0 * fd_c_validity_switch_ / fd_c_total_pert_;
+    if (!fd_c_noswitch_errors_.empty()) {
+      std::sort(fd_c_noswitch_errors_.begin(), fd_c_noswitch_errors_.end());
+      photo_diag_.fd_level_c_noswitch_samples =
+          static_cast<int>(fd_c_noswitch_errors_.size());
+      photo_diag_.fd_level_c_noswitch_median =
+          quantileSorted(fd_c_noswitch_errors_, 0.50);
+      photo_diag_.fd_level_c_noswitch_p95 =
+          quantileSorted(fd_c_noswitch_errors_, 0.95);
+    }
+  }
+}
+
+namespace {
+
+// Normalized error: |a-n| / max(1, |a|, |n|).
+double normErr(double a, double n) {
+  const double scale = std::max({1.0, std::abs(a), std::abs(n)});
+  return std::abs(a - n) / scale;
+}
+
+}  // namespace
+
+void LsqRegistration::runLevelAFd(const Transform& T_W_L) {
+  if (photo_samples_.empty() || static_cast<long>(fd_a_errors_.size()) >= 1000) return;
+
+  const double eps_px = 1e-4;
   std::mt19937 rng(12345);
   std::vector<PhotoSample> chosen;
-  chosen.reserve(40);
+  const size_t want = std::min<size_t>(40, photo_samples_.size());
   if (photo_samples_.size() <= 40) {
     chosen = photo_samples_;
   } else {
     std::vector<size_t> idx(photo_samples_.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::shuffle(idx.begin(), idx.end(), rng);
-    for (size_t k = 0; k < 40; ++k) chosen.push_back(photo_samples_[idx[k]]);
+    for (size_t k = 0; k < want; ++k) chosen.push_back(photo_samples_[idx[k]]);
   }
 
-  auto residual_at = [&](const Transform& T, const PhotoSample& s) -> double {
-    const Point p_W = T.linear() * s.p_j + T.translation();
+  for (const auto& s : chosen) {
+    const Point p_W = T_W_L.linear() * s.p_j + T_W_L.translation();
     size_t hash = map_.hashIndex(p_W);
     const Voxel* voxel = map_.getVoxel(hash);
     if (!voxel) {
-      if (!map_.nearestVoxel(p_W, hash)) return std::numeric_limits<double>::quiet_NaN();
+      if (!map_.nearestVoxel(p_W, hash)) continue;
       voxel = map_.getVoxel(hash);
-      if (!voxel) return std::numeric_limits<double>::quiet_NaN();
+      if (!voxel) continue;
     }
     const Point p_o = voxel->T_C_W_ * p_W;
-    const double x = p_o.x() * map_.inv_px_size;
-    const double y = p_o.y() * map_.inv_px_size;
-    double weight = 0.0;
-    if (!sampleMapWeight(voxel, x, y, weight)) return std::numeric_limits<double>::quiet_NaN();
-    if (weight < config_.photometric_min_map_weight) {
-      return std::numeric_limits<double>::quiet_NaN();
-    }
-    double I_P = 0.0;
-    if (!getSubPixelIntensityValue(voxel, x, y, I_P)) {
-      return std::numeric_limits<double>::quiet_NaN();
-    }
-    return s.I_i - I_P;
-  };
+    const double u = p_o.x() * map_.inv_px_size;
+    const double v = p_o.y() * map_.inv_px_size;
+    IntensitySample sample;
+    if (!sampleIntensityBilinearWithGradient(voxel, u, v, sample)) continue;
+    // Stay away from bilinear cell boundaries so +-eps stays in the same cell.
+    if (sample.frac_x < 0.05 || sample.frac_x > 0.95) continue;
+    if (sample.frac_y < 0.05 || sample.frac_y > 0.95) continue;
 
-  const double eps = 1e-6;
+    // FD along x and y (image space), same voxel and same cell.
+    IntensitySample s_px, s_mx, s_py, s_my;
+    if (!sampleIntensityBilinearWithGradient(voxel, u + eps_px, v, s_px)) continue;
+    if (!sampleIntensityBilinearWithGradient(voxel, u - eps_px, v, s_mx)) continue;
+    if (s_px.x0 != sample.x0 || s_mx.x0 != sample.x0) continue;
+    const double fd_x = (s_px.value - s_mx.value) / (2.0 * eps_px);
+    const double e_x = normErr(sample.gradient_pixel.x(), fd_x);
+    fd_a_errors_.push_back(e_x);
+    if (std::abs(fd_x) > 1.0) {
+      ++fd_a_sign_total_;
+      if ((sample.gradient_pixel.x() >= 0) == (fd_x >= 0)) ++fd_a_sign_agree_;
+    }
+
+    if (!sampleIntensityBilinearWithGradient(voxel, u, v + eps_px, s_py)) continue;
+    if (!sampleIntensityBilinearWithGradient(voxel, u, v - eps_px, s_my)) continue;
+    if (s_py.y0 != sample.y0 || s_my.y0 != sample.y0) continue;
+    const double fd_y = (s_py.value - s_my.value) / (2.0 * eps_px);
+    const double e_y = normErr(sample.gradient_pixel.y(), fd_y);
+    fd_a_errors_.push_back(e_y);
+    if (std::abs(fd_y) > 1.0) {
+      ++fd_a_sign_total_;
+      if ((sample.gradient_pixel.y() >= 0) == (fd_y >= 0)) ++fd_a_sign_agree_;
+    }
+  }
+}
+
+void LsqRegistration::runLevelBFd(const Transform& T_W_L) {
+  if (photo_samples_.empty() || fd_b_points_ >= 300) return;
+
+  const double eps_rot = 1e-5, eps_tr = 1e-5;
+  std::mt19937 rng(12345);
+  std::vector<PhotoSample> chosen;
+  const size_t want = std::min<size_t>(40, photo_samples_.size());
+  if (photo_samples_.size() <= 40) {
+    chosen = photo_samples_;
+  } else {
+    std::vector<size_t> idx(photo_samples_.size());
+    std::iota(idx.begin(), idx.end(), 0);
+    std::shuffle(idx.begin(), idx.end(), rng);
+    for (size_t k = 0; k < want; ++k) chosen.push_back(photo_samples_[idx[k]]);
+  }
+
   for (const auto& s : chosen) {
-    Eigen::Matrix<double, 6, 1> J_num;
-    bool ok = true;
+    // Fixed voxel correspondence (the one the analytic Jacobian used).
+    const Point p_W0 = T_W_L.linear() * s.p_j + T_W_L.translation();
+    size_t hash = map_.hashIndex(p_W0);
+    const Voxel* voxel = map_.getVoxel(hash);
+    if (!voxel) {
+      if (!map_.nearestVoxel(p_W0, hash)) continue;
+      voxel = map_.getVoxel(hash);
+      if (!voxel) continue;
+    }
+    const Point p_o0 = voxel->T_C_W_ * p_W0;
+    const int cell_x = std::floor(p_o0.x() * map_.inv_px_size);
+    const int cell_y = std::floor(p_o0.y() * map_.inv_px_size);
+
+    auto fixed_residual = [&](const Transform& T, int& cx, int& cy) -> double {
+      const Point p_W = T.linear() * s.p_j + T.translation();
+      const Point p_o = voxel->T_C_W_ * p_W;
+      const double u = p_o.x() * map_.inv_px_size;
+      const double v = p_o.y() * map_.inv_px_size;
+      double weight = 0.0;
+      if (!sampleMapWeight(voxel, u, v, weight)) return std::numeric_limits<double>::quiet_NaN();
+      if (weight < config_.photometric_min_map_weight) {
+        return std::numeric_limits<double>::quiet_NaN();
+      }
+      IntensitySample smp;
+      if (!sampleIntensityBilinearWithGradient(voxel, u, v, smp)) {
+        return std::numeric_limits<double>::quiet_NaN();
+      }
+      cx = smp.x0;
+      cy = smp.y0;
+      return s.I_i - smp.value;
+    };
+
+    bool any_dof = false;
     for (int dof = 0; dof < 6; ++dof) {
+      const double eps = dof < 3 ? eps_rot : eps_tr;
       Eigen::Matrix<double, 6, 1> xi_p = Eigen::Matrix<double, 6, 1>::Zero();
       Eigen::Matrix<double, 6, 1> xi_m = Eigen::Matrix<double, 6, 1>::Zero();
       xi_p(dof) = eps;
       xi_m(dof) = -eps;
-      const double rp = residual_at(perturb(T_W_L, xi_p), s);
-      const double rm = residual_at(perturb(T_W_L, xi_m), s);
-      if (std::isnan(rp) || std::isnan(rm)) {
-        ok = false;
-        break;
+      int cx_p = 0, cy_p = 0, cx_m = 0, cy_m = 0;
+      const double rp = fixed_residual(perturb(T_W_L, xi_p), cx_p, cy_p);
+      const double rm = fixed_residual(perturb(T_W_L, xi_m), cx_m, cy_m);
+      if (std::isnan(rp) || std::isnan(rm)) continue;  // validity changed
+      // Same bilinear cell required for the fixed-cell gate.
+      if (cx_p != cell_x || cy_p != cell_y || cx_m != cell_x || cy_m != cell_y) continue;
+      const double J_num = (rp - rm) / (2.0 * eps);
+      const double J_an = s.J(0, dof);
+      const double e = normErr(J_an, J_num);
+      fd_b_errors_.push_back(e);
+      fd_b_errors_dof_[dof].push_back(e);
+      fd_b_analytic_[dof].push_back(std::abs(J_an));
+      fd_b_numeric_[dof].push_back(std::abs(J_num));
+      if (std::abs(J_num) > 1.0) {
+        ++fd_b_sign_total_[dof];
+        if ((J_an >= 0) == (J_num >= 0)) ++fd_b_sign_agree_[dof];
       }
-      J_num(0, dof) = (rp - rm) / (2.0 * eps);
+      any_dof = true;
     }
-    if (!ok) continue;
-    const double max_abs = J_num.cwiseAbs().maxCoeff();
-    const double scale = std::max(max_abs, 1e-8);
-    for (int dof = 0; dof < 6; ++dof) {
-      const double rel = std::abs(s.J(0, dof) - J_num(0, dof)) / scale;
-      fd_rel_errors_.push_back(rel);
-    }
+    if (any_dof) ++fd_b_points_;
+  }
+}
+
+void LsqRegistration::runLevelCFd(const Transform& T_W_L) {
+  if (photo_samples_.empty()) return;
+
+  const double eps_rot = 1e-5, eps_tr = 1e-5;
+  std::mt19937 rng(12345);
+  std::vector<PhotoSample> chosen;
+  const size_t want = std::min<size_t>(40, photo_samples_.size());
+  if (photo_samples_.size() <= 40) {
+    chosen = photo_samples_;
+  } else {
+    std::vector<size_t> idx(photo_samples_.size());
+    std::iota(idx.begin(), idx.end(), 0);
+    std::shuffle(idx.begin(), idx.end(), rng);
+    for (size_t k = 0; k < want; ++k) chosen.push_back(photo_samples_[idx[k]]);
   }
 
-  if (fd_rel_errors_.size() >= 100) {
-    std::sort(fd_rel_errors_.begin(), fd_rel_errors_.end());
-    photo_diag_.fd_samples = static_cast<int>(fd_rel_errors_.size());
-    photo_diag_.fd_median_rel_err = quantileSorted(fd_rel_errors_, 0.50);
-    photo_diag_.fd_p95_rel_err = quantileSorted(fd_rel_errors_, 0.95);
-    photo_diag_.fd_done = true;
+  for (const auto& s : chosen) {
+    // Analytic voxel + cell (full lookup path).
+    const Point p_W0 = T_W_L.linear() * s.p_j + T_W_L.translation();
+    size_t hash0 = map_.hashIndex(p_W0);
+    const Voxel* voxel0 = map_.getVoxel(hash0);
+    if (!voxel0) {
+      if (!map_.nearestVoxel(p_W0, hash0)) continue;
+      voxel0 = map_.getVoxel(hash0);
+      if (!voxel0) continue;
+    }
+    const Point p_o0 = voxel0->T_C_W_ * p_W0;
+    const int cell_x = std::floor(p_o0.x() * map_.inv_px_size);
+    const int cell_y = std::floor(p_o0.y() * map_.inv_px_size);
+
+    // Full-lookup residual: re-hash, re-select voxel, re-sample.
+    auto full_residual = [&](const Transform& T, const Voxel** voxel_out, int& cx, int& cy,
+                             int& cxx0, int& cyy0) -> double {
+      const Point p_W = T.linear() * s.p_j + T.translation();
+      size_t hash = map_.hashIndex(p_W);
+      const Voxel* voxel = map_.getVoxel(hash);
+      if (!voxel) {
+        if (!map_.nearestVoxel(p_W, hash)) return std::numeric_limits<double>::quiet_NaN();
+        voxel = map_.getVoxel(hash);
+        if (!voxel) return std::numeric_limits<double>::quiet_NaN();
+      }
+      const Point p_o = voxel->T_C_W_ * p_W;
+      const double u = p_o.x() * map_.inv_px_size;
+      const double v = p_o.y() * map_.inv_px_size;
+      double weight = 0.0;
+      if (!sampleMapWeight(voxel, u, v, weight)) return std::numeric_limits<double>::quiet_NaN();
+      if (weight < config_.photometric_min_map_weight) {
+        return std::numeric_limits<double>::quiet_NaN();
+      }
+      IntensitySample smp;
+      if (!sampleIntensityBilinearWithGradient(voxel, u, v, smp)) {
+        return std::numeric_limits<double>::quiet_NaN();
+      }
+      *voxel_out = voxel;
+      cx = smp.x0;
+      cy = smp.y0;
+      cxx0 = static_cast<int>(std::floor(u));
+      cyy0 = static_cast<int>(std::floor(v));
+      return s.I_i - smp.value;
+    };
+
+    for (int dof = 0; dof < 6; ++dof) {
+      const double eps = dof < 3 ? eps_rot : eps_tr;
+      Eigen::Matrix<double, 6, 1> xi_p = Eigen::Matrix<double, 6, 1>::Zero();
+      Eigen::Matrix<double, 6, 1> xi_m = Eigen::Matrix<double, 6, 1>::Zero();
+      xi_p(dof) = eps;
+      xi_m(dof) = -eps;
+      const Voxel* vp = nullptr, *vm = nullptr;
+      int cx_p = 0, cy_p = 0, cx_m = 0, cy_m = 0;
+      int fx_p = 0, fy_p = 0, fx_m = 0, fy_m = 0;
+      const double rp = full_residual(perturb(T_W_L, xi_p), &vp, cx_p, cy_p, fx_p, fy_p);
+      const double rm = full_residual(perturb(T_W_L, xi_m), &vm, cx_m, cy_m, fx_m, fy_m);
+      ++fd_c_total_pert_;
+      if (vp != voxel0 || vm != voxel0) ++fd_c_voxel_switch_;
+      if (cx_p != cell_x || cy_p != cell_y || cx_m != cell_x || cy_m != cell_y) {
+        ++fd_c_cell_switch_;
+      }
+      if (std::isnan(rp) || std::isnan(rm)) {
+        ++fd_c_validity_switch_;
+        continue;
+      }
+      // No-switch subset: voxel, cell and validity all unchanged.
+      if (vp == voxel0 && vm == voxel0 && cx_p == cell_x && cy_p == cell_y &&
+          cx_m == cell_x && cy_m == cell_y) {
+        const double J_num = (rp - rm) / (2.0 * eps);
+        fd_c_noswitch_errors_.push_back(normErr(s.J(0, dof), J_num));
+      }
+    }
   }
 }
 
