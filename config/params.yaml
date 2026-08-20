@@ -15,6 +15,36 @@ preprocess:
 optimization:
   huber_delta: 0.1 # Huber norm threshold
 
+# COIN-BIEVR intensity channel (reproduction plan Section 39-40).
+# Values marked TBD are not specified in the COIN-BIEVR supplement.
+intensity:
+  enabled: True # Master switch. False = original BIEVR behaviour.
+
+  preprocessing:
+    enabled: True
+    projection: "spherical" # "spherical" (Eq. 1); "ouster_lut" needs a factory LUT
+    image_width: 1024 # TBD per sensor
+    image_height: 64 # TBD per sensor
+    vertical_fov_deg: 50.0 # TBD per sensor
+    brightness_window_u: 0 # 0 = full image width
+    brightness_window_v: 0 # 0 = full image height
+    normalization_scale: 140.0 # s in I_F = s*I/(I_B+1)
+    remove_lines: False # Ouster line-artifact removal (enable in Ouster sensor yaml)
+    gaussian_blur: False
+    raw_intensity_scale: 1.0
+    use_ouster_lut: False
+
+  sampling:
+    enabled: True
+    num_voxels: 100 # N_intensity_voxel (paper)
+    downsample_resolution_m: 0.1 # intensity point downsampling (paper)
+    weak_eigen_ratio: 10.0 # eta switch 10*lambda1 > lambda2 (paper)
+    normalize_eta: True # TBD (paper does not specify)
+
+  optimization:
+    enabled: True
+    photometric_scale: 0.02 # lambda; TBD (paper does not give a value)
+
 imu:  
     window_s: 10 # Time window for the inertial optimization [s]
     t_init: 0.2 # Time to initialize bias and gravity [s]

@@ -76,6 +76,31 @@ class MergedYaml {
     return default_value;
   }
 
+  // Like get(), but `dotted_key` may address a nested leaf, e.g.
+  // "preprocessing.enabled" resolves root["intensity"]["preprocessing"]["enabled"].
+  // Used by the COIN-BIEVR `intensity` section which is organised in sub-blocks.
+  template <typename T>
+  T getNested(const std::string& section, const std::string& dotted_key,
+              const T& default_value) const {
+    for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it) {
+      const YAML::Node& root = *it;
+      YAML::Node node = root[section];
+      if (!node) continue;
+      std::stringstream ss(dotted_key);
+      std::string part;
+      bool found = true;
+      while (std::getline(ss, part, '.')) {
+        if (!node[part]) {
+          found = false;
+          break;
+        }
+        node = node[part];
+      }
+      if (found) return node.as<T>();
+    }
+    return default_value;
+  }
+
  private:
   std::vector<YAML::Node> nodes_;
 };
@@ -163,6 +188,30 @@ inline void printConfigOverview(const Config& config) {
   os << "  huber_delta:          " << hc.registration.huber_delta << "\n";
   os << "  img_residual:         " << yn(hc.registration.img_residual) << "\n";
   os << "  img_jacobian:         " << yn(hc.registration.img_jacobian) << "\n";
+  os << "intensity (COIN-BIEVR):\n";
+  os << "  enabled:              " << yn(hc.intensity.enabled) << "\n";
+  os << "  preprocessing:\n";
+  os << "    enabled:            " << yn(hc.intensity.preprocessing.enabled) << "\n";
+  os << "    projection:         " << hc.intensity.preprocessing.projection << "\n";
+  os << "    image (w x h):      " << hc.intensity.preprocessing.image_width << " x "
+     << hc.intensity.preprocessing.image_height << "\n";
+  os << "    vertical_fov_deg:   " << hc.intensity.preprocessing.vertical_fov_deg << "\n";
+  os << "    brightness_window:  " << hc.intensity.preprocessing.brightness_window_u << " x "
+     << hc.intensity.preprocessing.brightness_window_v << "\n";
+  os << "    normalization_scale:" << hc.intensity.preprocessing.normalization_scale << "\n";
+  os << "    remove_lines:       " << yn(hc.intensity.preprocessing.remove_lines) << "\n";
+  os << "    gaussian_blur:      " << yn(hc.intensity.preprocessing.gaussian_blur) << "\n";
+  os << "    raw_intensity_scale:" << hc.intensity.preprocessing.raw_intensity_scale << "\n";
+  os << "    use_ouster_lut:     " << yn(hc.intensity.preprocessing.use_ouster_lut) << "\n";
+  os << "  sampling:\n";
+  os << "    enabled:            " << yn(hc.intensity.sampling.enabled) << "\n";
+  os << "    num_voxels:         " << hc.intensity.sampling.num_voxels << "\n";
+  os << "    downsample_res_m:   " << hc.intensity.sampling.downsample_resolution_m << "\n";
+  os << "    weak_eigen_ratio:   " << hc.intensity.sampling.weak_eigen_ratio << "\n";
+  os << "    normalize_eta:      " << yn(hc.intensity.sampling.normalize_eta) << "\n";
+  os << "  optimization:\n";
+  os << "    enabled:            " << yn(hc.intensity.optimization_enabled) << "\n";
+  os << "    photometric_scale:  " << hc.intensity.photometric_scale << "\n";
   os << "imu:\n";
   os << "  window_s:             " << hc.imu.window_length_s << "\n";
   os << "  t_init:               " << hc.imu.t_init << "\n";
@@ -245,6 +294,48 @@ inline bool loadConfigFromYaml(const std::vector<std::string>& yaml_paths, Confi
   }
   hc.registration.img_residual = yaml.get<bool>("optimization", "img_residual", true);
   hc.registration.img_jacobian = yaml.get<bool>("optimization", "img_jacobian", true);
+
+  // --- intensity (COIN-BIEVR) ---
+  auto& ic = hc.intensity;
+  ic.enabled = yaml.get<bool>("intensity", "enabled", ic.enabled);
+  auto& pre = ic.preprocessing;
+  pre.enabled = yaml.getNested<bool>("intensity", "preprocessing.enabled", pre.enabled);
+  pre.projection = yaml.getNested<std::string>("intensity", "preprocessing.projection",
+                                               pre.projection);
+  pre.image_width = yaml.getNested<int>("intensity", "preprocessing.image_width", pre.image_width);
+  pre.image_height =
+      yaml.getNested<int>("intensity", "preprocessing.image_height", pre.image_height);
+  pre.vertical_fov_deg = yaml.getNested<double>("intensity", "preprocessing.vertical_fov_deg",
+                                                pre.vertical_fov_deg);
+  pre.brightness_window_u = yaml.getNested<int>("intensity", "preprocessing.brightness_window_u",
+                                                pre.brightness_window_u);
+  pre.brightness_window_v = yaml.getNested<int>("intensity", "preprocessing.brightness_window_v",
+                                                pre.brightness_window_v);
+  pre.normalization_scale = yaml.getNested<double>(
+      "intensity", "preprocessing.normalization_scale", pre.normalization_scale);
+  pre.remove_lines =
+      yaml.getNested<bool>("intensity", "preprocessing.remove_lines", pre.remove_lines);
+  pre.gaussian_blur =
+      yaml.getNested<bool>("intensity", "preprocessing.gaussian_blur", pre.gaussian_blur);
+  pre.raw_intensity_scale = yaml.getNested<double>(
+      "intensity", "preprocessing.raw_intensity_scale", pre.raw_intensity_scale);
+  pre.use_ouster_lut =
+      yaml.getNested<bool>("intensity", "preprocessing.use_ouster_lut", pre.use_ouster_lut);
+
+  auto& samp = ic.sampling;
+  samp.enabled = yaml.getNested<bool>("intensity", "sampling.enabled", samp.enabled);
+  samp.num_voxels = yaml.getNested<size_t>("intensity", "sampling.num_voxels", samp.num_voxels);
+  samp.downsample_resolution_m = yaml.getNested<double>(
+      "intensity", "sampling.downsample_resolution_m", samp.downsample_resolution_m);
+  samp.weak_eigen_ratio =
+      yaml.getNested<double>("intensity", "sampling.weak_eigen_ratio", samp.weak_eigen_ratio);
+  samp.normalize_eta =
+      yaml.getNested<bool>("intensity", "sampling.normalize_eta", samp.normalize_eta);
+
+  ic.optimization_enabled =
+      yaml.getNested<bool>("intensity", "optimization.enabled", ic.optimization_enabled);
+  ic.photometric_scale = yaml.getNested<double>("intensity", "optimization.photometric_scale",
+                                                ic.photometric_scale);
 
   // --- imu (params side: inertial window + normalization) ---
   if (!config_internal::getPositive(yaml, "imu", "window_s", 10., hc.imu.window_length_s) ||
