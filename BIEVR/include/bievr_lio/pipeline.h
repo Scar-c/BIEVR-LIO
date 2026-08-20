@@ -160,6 +160,12 @@ class Pipeline {
   std::shared_ptr<std::ofstream> photo_diag_csv_;
   // Optional per-(lambda, frame) robust shadow scan CSV (round-7).
   std::shared_ptr<std::ofstream> robust_scan_csv_;
+  // Round-9 weak-direction audit state (previous frame; used only for the
+  // per-frame temporal diagnostics, never changes the algorithm).
+  Eigen::Vector3d prev_eta_world_ = Eigen::Vector3d::Zero();
+  Eigen::Matrix3d prev_weak_subspace_ = Eigen::Matrix3d::Zero();
+  std::vector<size_t> prev_selected_hashes_;
+  bool have_prev_audit_ = false;
   // Stamp when the pipeline entered Phase::Running (used by the photometric
   // warmup gate). 0 = not yet running.
   uint64_t running_start_time_ = 0;

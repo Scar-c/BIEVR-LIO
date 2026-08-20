@@ -157,7 +157,14 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
              "fd_c_voxel_switch,fd_c_cell_switch,fd_c_validity_switch,"
              "fd_c_noswitch_samples,fd_c_noswitch_median,fd_c_noswitch_p95,"
              "photo_near_fraction,photo_near_r_p50,photo_near_r_p90,photo_far_r_p50,photo_far_r_p90,"
-             "geo_lambda1,geo_lambda2,geo_lambda3,geo_two_weak_flag\n";
+             "geo_lambda1,geo_lambda2,geo_lambda3,geo_two_weak_flag,"
+             "eta_world_x,eta_world_y,eta_world_z,eta_abs_dot_prev,eta_angle_prev_deg,"
+             "weak_subspace_diff_F,selected_voxel_jaccard,selected_voxel_retention,"
+             "selected_score_p10,selected_score_p50,selected_score_p90,selected_score_max,"
+             "candidate_score_p50,candidate_score_p90,candidate_score_p99,"
+             "q_geo_v1,q_geo_v2,q_photo_v1,q_photo_v2,"
+             "s_geo_v1,s_geo_v2,s_photo_v1,s_photo_v2,"
+             "parity_count_serial,parity_count_parallel,parity_cost_rel,parity_H_rel,parity_b_rel\n";
     } else {
       LOG(E, "Failed to open photometric diagnostics CSV at "
                  << config_.photo_diagnostics_path);
@@ -350,6 +357,12 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
           ? LsqRegistration(*map_, source_filtered, intensity_samples.points,
                             intensity_samples.intensities, reg_config)
           : LsqRegistration(*map_, source_filtered, reg_config);
+  // Round-9: feed the Eq.7 weak eigenvectors (world) into the optimizer so the
+  // final-pose directional Hessian/gradient audit is computed in the exact
+  // perturbation frame. Diagnostic only.
+  if (intensity_enabled) {
+    optimizer.setWeakDirections(intensity_samples.weak_v1, intensity_samples.weak_v2);
+  }
   const Transform T_W_I = optimizer.computeTransformation(T_W_I_init);
   const int n_effective_points = optimizer.numEffectivePoints();
   align_timer.Stop();
@@ -456,6 +469,80 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     diag.geo_lambda2 = intensity_samples.weak_eigenvalues.y();
     diag.geo_lambda3 = intensity_samples.weak_eigenvalues.z();
     diag.geo_two_weak_flag = (10.0 * diag.geo_lambda1 > diag.geo_lambda2) ? 1 : 0;
+    // Round-9 weak-direction audit (diagnostic only; sections 42-49).
+    if (intensity_enabled) {
+      diag.eta_world = intensity_samples.weak_direction;
+      const Eigen::Matrix3d P_cur =
+          intensity_samples.weak_v1 * intensity_samples.weak_v1.transpose() +
+          intensity_samples.weak_v2 * intensity_samples.weak_v2.transpose();
+      if (have_prev_audit_) {
+        const double adot = std::clamp(
+            std::abs(prev_eta_world_.dot(intensity_samples.weak_direction)), 0.0, 1.0);
+        diag.eta_abs_dot_prev = adot;
+        diag.eta_angle_prev_deg = std::acos(adot) * 180.0 / M_PI;
+        diag.weak_subspace_diff_F = (P_cur - prev_weak_subspace_).norm();
+        if (!prev_selected_hashes_.empty() && !intensity_samples.selected_voxel_hashes.empty()) {
+          ankerl::unordered_dense::set<size_t> cur(intensity_samples.selected_voxel_hashes.begin(),
+                                                   intensity_samples.selected_voxel_hashes.end());
+          size_t inter = 0;
+          for (const size_t h : prev_selected_hashes_) {
+            if (cur.contains(h)) ++inter;
+          }
+          const size_t uni = prev_selected_hashes_.size() +
+                             intensity_samples.selected_voxel_hashes.size() - inter;
+          diag.selected_voxel_jaccard = uni > 0 ? static_cast<double>(inter) / uni : 0.0;
+          diag.selected_voxel_retention =
+              static_cast<double>(inter) / intensity_samples.selected_voxel_hashes.size();
+        }
+      } else {
+        diag.eta_abs_dot_prev = 1.0;
+        diag.eta_angle_prev_deg = 0.0;
+      }
+      // Eq.8 score distributions (selected subset vs all candidates).
+      auto quantile = [](std::vector<double>& v, double q) {
+        if (v.empty()) return 0.0;
+        std::sort(v.begin(), v.end());
+        const double idx = q * (v.size() - 1);
+        const size_t lo = static_cast<size_t>(std::floor(idx));
+        const size_t hi = static_cast<size_t>(std::ceil(idx));
+        return lo == hi ? v[lo] : v[lo] * (1.0 - (idx - lo)) + v[hi] * (idx - lo);
+      };
+      if (!intensity_samples.voxel_scores.empty()) {
+        std::vector<double> cand, sel;
+        cand.reserve(intensity_samples.voxel_scores.size());
+        for (const auto& s : intensity_samples.voxel_scores) cand.push_back(s.first);
+        ankerl::unordered_dense::set<size_t> sel_set(
+            intensity_samples.selected_voxel_hashes.begin(),
+            intensity_samples.selected_voxel_hashes.end());
+        sel.reserve(intensity_samples.selected_voxel_hashes.size());
+        for (const auto& s : intensity_samples.voxel_scores) {
+          if (sel_set.contains(s.second)) sel.push_back(s.first);
+        }
+        diag.selected_score_p10 = quantile(sel, 0.10);
+        diag.selected_score_p50 = quantile(sel, 0.50);
+        diag.selected_score_p90 = quantile(sel, 0.90);
+        diag.selected_score_max = sel.empty() ? 0.0
+                                              : *std::max_element(sel.begin(), sel.end());
+        diag.candidate_score_p50 = quantile(cand, 0.50);
+        diag.candidate_score_p90 = quantile(cand, 0.90);
+        diag.candidate_score_p99 = quantile(cand, 0.99);
+      }
+      have_prev_audit_ = true;
+      prev_eta_world_ = intensity_samples.weak_direction;
+      prev_weak_subspace_ = P_cur;
+      prev_selected_hashes_ = intensity_samples.selected_voxel_hashes;
+    }
+    // Round-9 real-data serial-vs-production parity (section 51-53): run BOTH
+    // photometric accumulation paths at the final pose and record the relative
+    // errors. Computed in shadow mode (C0), where photo never enters the solve.
+    if (reg_config.shadow_photometric && !intensity_samples.points.empty()) {
+      const auto par = optimizer.runPhotometricParity(T_W_I);
+      diag.parity_count_serial = par.count_serial;
+      diag.parity_count_parallel = par.count_parallel;
+      diag.parity_cost_rel = par.cost_rel;
+      diag.parity_H_rel = par.H_rel;
+      diag.parity_b_rel = par.b_rel;
+    }
     writePhotometricDiagnostics(header.stamp, diag);
   }
 
@@ -536,8 +623,19 @@ void Pipeline::writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiag
                    << d.fd_level_c_noswitch_median << "," << d.fd_level_c_noswitch_p95 << ","
                    << d.photo_near_fraction << "," << d.photo_near_r_p50 << ","
                    << d.photo_near_r_p90 << "," << d.photo_far_r_p50 << "," << d.photo_far_r_p90
-                   << "," << d.geo_lambda1 << "," << d.geo_lambda2 << "," << d.geo_lambda3 << ","
-                   << d.geo_two_weak_flag << "\n";
+                   << ","                    << d.geo_lambda1 << "," << d.geo_lambda2 << "," << d.geo_lambda3 << ","
+                   << d.geo_two_weak_flag << "," << d.eta_world.x() << "," << d.eta_world.y()
+                   << "," << d.eta_world.z() << "," << d.eta_abs_dot_prev << ","
+                   << d.eta_angle_prev_deg << "," << d.weak_subspace_diff_F << ","
+                   << d.selected_voxel_jaccard << "," << d.selected_voxel_retention << ","
+                   << d.selected_score_p10 << "," << d.selected_score_p50 << ","
+                   << d.selected_score_p90 << "," << d.selected_score_max << ","
+                   << d.candidate_score_p50 << "," << d.candidate_score_p90 << ","
+                   << d.candidate_score_p99 << "," << d.q_geo_v1 << "," << d.q_geo_v2 << ","
+                   << d.q_photo_v1 << "," << d.q_photo_v2 << "," << d.s_geo_v1 << ","
+                   << d.s_geo_v2 << "," << d.s_photo_v1 << "," << d.s_photo_v2 << ","
+                   << d.parity_count_serial << "," << d.parity_count_parallel << ","
+                   << d.parity_cost_rel << "," << d.parity_H_rel << "," << d.parity_b_rel << "\n";
 }
 
 void Pipeline::writeRobustShadowScan(uint64_t stamp,

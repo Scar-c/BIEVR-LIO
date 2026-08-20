@@ -57,7 +57,8 @@ std::vector<size_t> findObservedVoxels(const BIEVRMap& map, const Pointcloud& un
 Eigen::Vector3d estimateWeakGeometryDirection(const BIEVRMap& map,
                                               const std::vector<size_t>& observed_hashes,
                                               double weak_eigen_ratio, bool normalize_eta,
-                                              Eigen::Vector3d* eigenvalues_out) {
+                                              Eigen::Vector3d* eigenvalues_out,
+                                              Eigen::Matrix3d* eigenvectors_out) {
   Eigen::Matrix3d A = Eigen::Matrix3d::Zero();
   for (const size_t hash : observed_hashes) {
     const Voxel* voxel = map.getVoxel(hash);
@@ -83,6 +84,7 @@ Eigen::Vector3d estimateWeakGeometryDirection(const BIEVRMap& map,
   }
 
   if (eigenvalues_out) *eigenvalues_out = eigenvalues;
+  if (eigenvectors_out) *eigenvectors_out = V;
   return eta;
 }
 
@@ -207,11 +209,15 @@ IntensitySampleSet sampleIntensityPoints(const BIEVRMap& map, const Pointcloud& 
   result.observed_voxels = observed_hashes.size();
   if (observed_hashes.empty()) return result;
 
+  Eigen::Matrix3d V = Eigen::Matrix3d::Zero();
   result.weak_direction = estimateWeakGeometryDirection(map, observed_hashes, config.weak_eigen_ratio,
                                                         config.normalize_eta,
-                                                        &result.weak_eigenvalues);
+                                                        &result.weak_eigenvalues, &V);
+  result.weak_v1 = V.col(0);
+  result.weak_v2 = V.col(1);
   const std::vector<std::pair<double, size_t>> scores =
       scoreIntensityVoxels(map, observed_hashes, result.weak_direction, config.score_mode);
+  result.voxel_scores = scores;
   result.selected_voxel_hashes = selectTopIntensityVoxels(scores, config.num_voxels);
   result.selected_voxels = result.selected_voxel_hashes.size();
   if (result.selected_voxel_hashes.empty()) return result;

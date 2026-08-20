@@ -39,6 +39,10 @@ struct IntensitySampleSet {
   size_t selected_voxels = 0;   // # selected intensity voxels (<= num_voxels)
   Eigen::Vector3d weak_direction = Eigen::Vector3d::Zero();     // eta (world)
   Eigen::Vector3d weak_eigenvalues = Eigen::Vector3d::Zero();   // lambda1..3
+  // Round-9 audit: the two smallest eigenvectors (world), and the raw Eq.8
+  // candidate scores for all observed voxels (diagnostic only).
+  Eigen::Vector3d weak_v1 = Eigen::Vector3d::Zero(), weak_v2 = Eigen::Vector3d::Zero();
+  std::vector<std::pair<double, size_t>> voxel_scores;
   std::vector<size_t> selected_voxel_hashes;
 };
 
@@ -49,11 +53,13 @@ std::vector<size_t> findObservedVoxels(const BIEVRMap& map, const Pointcloud& un
 
 // Eq. (7): builds A = sum_{i in V} n_i n_i^T from map voxel normals and returns
 // eta = v1 + v2 if 10*lambda1 > lambda2 else v1 (lambda sorted ascending).
-// Optionally reports the eigenvalues. eta is in the world frame.
+// Optionally reports the eigenvalues and the eigenvector matrix V (columns are
+// v1..v3, ascending eigenvalues). eta is in the world frame.
 Eigen::Vector3d estimateWeakGeometryDirection(const BIEVRMap& map,
                                               const std::vector<size_t>& observed_hashes,
                                               double weak_eigen_ratio, bool normalize_eta,
-                                              Eigen::Vector3d* eigenvalues_out = nullptr);
+                                              Eigen::Vector3d* eigenvalues_out = nullptr,
+                                              Eigen::Matrix3d* eigenvectors_out = nullptr);
 
 // Eq. (8): voxel contribution l_c = (R_CW eta) . iota using the voxel-local
 // intensity information vector. `score_mode` selects "abs_components" (default,
