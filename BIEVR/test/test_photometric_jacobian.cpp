@@ -112,6 +112,7 @@ int main() {
   mcfg.px_size = 0.05;
   mcfg.weighted = false;
   mcfg.smooth = false;
+  mcfg.intensity_enabled = true;
 
   // Dense 5x5 grid (0.05 m spacing -> adjacent pixels) + a far point in a
   // second voxel so the grid voxel group is processed.

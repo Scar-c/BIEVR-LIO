@@ -55,6 +55,7 @@ int main() {
   mcfg.px_size = 0.05;
   mcfg.weighted = false;
   mcfg.smooth = false;
+  mcfg.intensity_enabled = true;
   bievr::BIEVRMap map1(mcfg);
   const bievr::Voxel* voxel1 = buildGradientVoxel(map1, alongX);
   if (!voxel1) return fail("voxel not built (pattern along X)");

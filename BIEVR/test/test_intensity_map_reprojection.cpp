@@ -30,6 +30,7 @@ int main() {
   mcfg.px_size = 0.05;
   mcfg.weighted = true;
   mcfg.smooth = false;
+  mcfg.intensity_enabled = true;
   mcfg.norm_tol_deg = 3.0;
   bievr::BIEVRMap map(mcfg);
 
