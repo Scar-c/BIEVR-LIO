@@ -53,44 +53,56 @@ Eigen::MatrixXd maskedBoxAverage(const Eigen::MatrixXf& values, const Eigen::Mat
 
 IntensityProcessor::IntensityProcessor(const IntensityProcessorConfig& config) : config_(config) {}
 
+bool IntensityProcessor::projectPoint(const Point& p, int& u, int& v) const {
+  const double r = p.norm();
+  if (!std::isfinite(r) || r < 1e-6) return false;
+
+  const double az = std::atan2(p.y(), p.x());
+  const double el = std::asin(std::max(-1.0, std::min(1.0, p.z() / r)));
+
+  const int W = config_.image_width;
+  const int H = config_.image_height;
+  const double fov_rad = kPi * config_.vertical_fov_deg / 180.0;
+
+  u = static_cast<int>(std::lround(-W / (2.0 * kPi) * az + W / 2.0));
+  v = static_cast<int>(std::lround(-H / fov_rad * el + H / 2.0));
+
+  // Clamp into the image (Scheme B): keep every finite point in the normalized
+  // domain. A sensor-FOV / image-size mismatch shows up in the collision
+  // diagnostics (points piling up on the boundary rows) instead of dropping
+  // points from the full-cloud map update.
+  u = std::max(0, std::min(W - 1, u));
+  v = std::max(0, std::min(H - 1, v));
+  return true;
+}
+
 ProjectedIntensityImage IntensityProcessor::project(const Pointcloud& points_L,
                                                     const IntensityView& raw_intensity) const {
   const int W = config_.image_width;
   const int H = config_.image_height;
-  const double fov_rad = kPi * config_.vertical_fov_deg / 180.0;
   const double scale = static_cast<double>(config_.raw_intensity_scale);
 
   ProjectedIntensityImage image;
   image.intensity = Eigen::MatrixXf::Zero(H, W);
   image.point_index = Eigen::MatrixXi::Constant(H, W, -1);
+  image.range = Eigen::MatrixXf::Constant(H, W, std::numeric_limits<float>::max());
   image.valid = Eigen::Matrix<uint8_t, Eigen::Dynamic, Eigen::Dynamic>::Zero(H, W);
 
   if (points_L.empty()) return image;
 
-  std::vector<double> ranges(points_L.size());
   for (size_t i = 0; i < points_L.size(); ++i) {
-    ranges[i] = points_L[i].norm();
-  }
+    int u = 0, v = 0;
+    if (!projectPoint(points_L[i], u, v)) continue;
 
-  for (size_t i = 0; i < points_L.size(); ++i) {
-    const Point& p = points_L[i];
-    const double r = ranges[i];
-    if (r < 1e-6) continue;
-
-    const double az = std::atan2(p.y(), p.x());
-    const double el = std::asin(std::max(-1.0, std::min(1.0, p.z() / r)));
-
-    int u = static_cast<int>(std::lround(-W / (2.0 * kPi) * az + W / 2.0));
-    int v = static_cast<int>(std::lround(-H / fov_rad * el + H / 2.0));
-    if (u < 0 || u >= W || v < 0 || v >= H) continue;
-
+    const double r = points_L[i].norm();
     // Closest point owns the pixel.
     const float val = static_cast<float>(raw_intensity.size() > i
                                              ? static_cast<double>(raw_intensity(0, i)) * scale
                                              : 0.0);
-    if (image.valid(v, u) == 0 || r < ranges[image.point_index(v, u)]) {
+    if (image.valid(v, u) == 0 || r < image.range(v, u)) {
       image.intensity(v, u) = val;
       image.point_index(v, u) = static_cast<int>(i);
+      image.range(v, u) = static_cast<float>(r);
       image.valid(v, u) = 1;
     }
   }
@@ -190,36 +202,97 @@ void IntensityProcessor::gaussianBlur(Eigen::MatrixXf& image, const Eigen::Matri
   }
 }
 
-Intensities IntensityProcessor::process(const Pointcloud& points_L,
-                                        const IntensityView& raw_intensity) {
-  Intensities filtered(1, points_L.size());
+IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L,
+                                                      const IntensityView& raw_intensity) {
+  IntensityProcessingResult out;
+  const size_t N = points_L.size();
+  out.filtered.resize(1, N);
+  out.point_pixel_idx.assign(N, -1);
+  out.num_valid = 0;
+  out.num_unique_pixels = 0;
+  out.num_collisions = 0;
+  out.num_invalid = 0;
+  out.filtered_min = 0.0;
+  out.filtered_max = 0.0;
+  out.filtered_mean = 0.0;
+  if (N == 0) return out;
 
-  if (points_L.empty()) return filtered;
+  // -------------------------------------------------------------------
+  // 1. Project every point; build the sparse image (nearest owner per pixel)
+  //    and the per-point point -> pixel map.
+  // -------------------------------------------------------------------
+  ProjectedIntensityImage image;
+  image.intensity = Eigen::MatrixXf::Zero(config_.image_height, config_.image_width);
+  image.point_index = Eigen::MatrixXi::Constant(config_.image_height, config_.image_width, -1);
+  image.range =
+      Eigen::MatrixXf::Constant(config_.image_height, config_.image_width,
+                                std::numeric_limits<float>::max());
+  image.valid = Eigen::Matrix<uint8_t, Eigen::Dynamic, Eigen::Dynamic>::Zero(
+      config_.image_height, config_.image_width);
+  const int W = config_.image_width;
 
-  ProjectedIntensityImage image = project(points_L, raw_intensity);
+  for (size_t i = 0; i < N; ++i) {
+    int u = 0, v = 0;
+    if (!projectPoint(points_L[i], u, v)) {
+      out.point_pixel_idx[i] = -1;
+      ++out.num_invalid;
+      continue;
+    }
 
-  // Start from the raw (scaled) intensity so points that do not own a pixel
-  // keep a well-defined value.
-  for (size_t i = 0; i < points_L.size(); ++i) {
-    filtered(0, i) = raw_intensity.size() > i ? raw_intensity(0, i) * config_.raw_intensity_scale
-                                              : 0.0;
-  }
+    const int linear = v * W + u;
+    out.point_pixel_idx[i] = linear;
 
-  // 0/1 validity mask derived from the point-index map (point_index == -1 means
-  // empty). Using point_index directly as the mask would wrongly treat the
-  // pixel owned by point 0 (index 0) as empty.
-  const Eigen::MatrixXi valid_mask = (image.point_index.array() >= 0).cast<int>();
-  image.intensity = normalizeImage(image.intensity, valid_mask);
+    if (image.valid(v, u) == 0) {
+      ++out.num_unique_pixels;
+    } else {
+      ++out.num_collisions;
+    }
 
-  for (int v = 0; v < image.intensity.rows(); ++v) {
-    for (int u = 0; u < image.intensity.cols(); ++u) {
-      if (image.valid(v, u) == 0) continue;
-      const int idx = image.point_index(v, u);
-      filtered(0, idx) = image.intensity(v, u);
+    const double r = points_L[i].norm();
+    const float val = static_cast<float>(raw_intensity.size() > i
+                                             ? static_cast<double>(raw_intensity(0, i)) *
+                                                   config_.raw_intensity_scale
+                                             : 0.0);
+    // Closest point owns the pixel (defines the representative raw intensity).
+    if (image.valid(v, u) == 0 || r < image.range(v, u)) {
+      image.intensity(v, u) = val;
+      image.point_index(v, u) = static_cast<int>(i);
+      image.range(v, u) = static_cast<float>(r);
+      image.valid(v, u) = 1;
     }
   }
 
-  return filtered;
+  // -------------------------------------------------------------------
+  // 2. Sparse brightness normalization.
+  // -------------------------------------------------------------------
+  const Eigen::MatrixXi valid_mask = (image.point_index.array() >= 0).cast<int>();
+  image.intensity = normalizeImage(image.intensity, valid_mask);
+
+  // -------------------------------------------------------------------
+  // 3. Back-assign I_F(v_i,u_i) to EVERY projected point (not only the pixel
+  //    owners), so points sharing a pixel all stay in the normalized domain.
+  // -------------------------------------------------------------------
+  double sum = 0.0;
+  out.filtered_min = std::numeric_limits<double>::max();
+  out.filtered_max = std::numeric_limits<double>::lowest();
+  for (size_t i = 0; i < N; ++i) {
+    const int linear = out.point_pixel_idx[i];
+    if (linear < 0) {
+      out.filtered(0, i) = 0.0f;  // defensive: such points are pre-filtered upstream
+      continue;
+    }
+    const int v = linear / W;
+    const int u = linear % W;
+    const double val = static_cast<double>(image.intensity(v, u));
+    out.filtered(0, i) = static_cast<float>(val);
+    ++out.num_valid;
+    sum += val;
+    out.filtered_min = std::min(out.filtered_min, val);
+    out.filtered_max = std::max(out.filtered_max, val);
+  }
+  out.filtered_mean = out.num_valid > 0 ? sum / static_cast<double>(out.num_valid) : 0.0;
+
+  return out;
 }
 
 Eigen::MatrixXf IntensityProcessor::normalizeImage(const Eigen::MatrixXf& intensity_image,

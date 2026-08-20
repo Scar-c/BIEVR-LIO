@@ -93,6 +93,15 @@ struct FrameStats {
   double intensity_preprocess_ms = 0.0;
   double intensity_sampling_ms = 0.0;
   int intensity_map_voxels = 0;
+  // Low-overhead intensity preprocessing diagnostics (0 when disabled).
+  int intensity_input_points = 0;
+  int intensity_valid_points = 0;
+  int intensity_unique_pixels = 0;
+  int intensity_collisions = 0;
+  int intensity_invalid = 0;
+  double intensity_filtered_min = 0.0;
+  double intensity_filtered_max = 0.0;
+  double intensity_filtered_mean = 0.0;
 };
 
 // Prints the COIN-LIO style live status dashboard (position, orientation,

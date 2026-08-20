@@ -129,13 +129,18 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
 
   // COIN-BIEVR: per-frame intensity normalization in the LiDAR frame. The
   // output is index-aligned with points_filtered_L (hence also with the
-  // transformed / undistorted spatial clouds downstream).
+  // transformed / undistorted spatial clouds downstream). When the master
+  // switch is off this block is not executed at all; when the master switch is
+  // on but preprocessing is disabled, the processor runs a debug/ablation
+  // bypass that still returns an index-aligned (non-empty) intensity row.
   const bool intensity_enabled = config_.intensity.enabled;
   Intensities filtered_intensity;
-  if (intensity_enabled && config_.intensity.preprocessing.enabled) {
+  IntensityProcessingResult intensity_result;
+  if (intensity_enabled) {
     timing::Timer inten_timer("02a_intensity_preprocess");
     const Pointcloud points_lidar = filtered_L;
-    filtered_intensity = intensity_processor_.process(points_lidar, intensities);
+    intensity_result = intensity_processor_.process(points_lidar, intensities);
+    filtered_intensity = std::move(intensity_result.filtered);
     inten_timer.Stop();
   }
 
@@ -284,6 +289,15 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     map_->forEachVoxel([&stats](size_t, const Voxel& v) {
       if (v.intensity_img_.rows() > 0) ++stats.intensity_map_voxels;
     });
+    // Low-overhead intensity preprocessing diagnostics (empty when disabled).
+    stats.intensity_input_points = static_cast<int>(intensity_result.filtered.size());
+    stats.intensity_valid_points = static_cast<int>(intensity_result.num_valid);
+    stats.intensity_unique_pixels = static_cast<int>(intensity_result.num_unique_pixels);
+    stats.intensity_collisions = static_cast<int>(intensity_result.num_collisions);
+    stats.intensity_invalid = static_cast<int>(intensity_result.num_invalid);
+    stats.intensity_filtered_min = intensity_result.filtered_min;
+    stats.intensity_filtered_max = intensity_result.filtered_max;
+    stats.intensity_filtered_mean = intensity_result.filtered_mean;
 
     printDashboard(dashboard_, header.stamp, T_W_I, x_j_pred.v, acc_bias_, gyro_bias_,
                    timing::Timing::GetMeanSeconds("step"), timing::Timing::GetMaxSeconds("step"),

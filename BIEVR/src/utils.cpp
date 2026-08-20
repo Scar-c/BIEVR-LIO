@@ -116,6 +116,15 @@ void printDashboard(DashboardState& state, uint64_t stamp_ns, const Transform& T
   out << row("Intensity Preproc     [ms] : " + dashMs(stats.intensity_preprocess_ms)) << "\n";
   out << row("Intensity Sampling    [ms] : " + dashMs(stats.intensity_sampling_ms)) << "\n";
   out << row("Intensity Map Voxels  [#] : " + std::to_string(stats.intensity_map_voxels)) << "\n";
+  out << row("Intensity diag pts/v/pix/coll/inv : " + std::to_string(stats.intensity_input_points) +
+             "/" + std::to_string(stats.intensity_valid_points) + "/" +
+             std::to_string(stats.intensity_unique_pixels) + "/" +
+             std::to_string(stats.intensity_collisions) + "/" +
+             std::to_string(stats.intensity_invalid))
+      << "\n";
+  out << row("Intensity filtered min/max/mean : " + dashFmt(stats.intensity_filtered_min) + " " +
+             dashFmt(stats.intensity_filtered_max) + " " + dashFmt(stats.intensity_filtered_mean))
+      << "\n";
   out << rule;
 
   std::cout << out.str() << std::endl;

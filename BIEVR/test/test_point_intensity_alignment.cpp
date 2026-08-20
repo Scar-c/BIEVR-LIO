@@ -46,7 +46,7 @@ int main() {
 
   const bievr::Pointcloud spatial = cloud;  // LiDAR frame
   const bievr::StampedIntensityPointcloud& ccloud = cloud;
-  const bievr::Intensities filtered = processor.process(spatial, ccloud.intensities());
+  const bievr::Intensities filtered = processor.process(spatial, ccloud.intensities()).filtered;
 
   if (static_cast<size_t>(filtered.size()) != static_cast<size_t>(N)) {
     return fail("filtered intensity size != point cloud size");
@@ -62,7 +62,7 @@ int main() {
   }
 
   // Determinism: processing the same cloud twice yields identical output.
-  const bievr::Intensities filtered2 = processor.process(spatial, ccloud.intensities());
+  const bievr::Intensities filtered2 = processor.process(spatial, ccloud.intensities()).filtered;
   if (!filtered.isApprox(filtered2, 1e-12)) return fail("intensity processor not deterministic");
 
   return 0;

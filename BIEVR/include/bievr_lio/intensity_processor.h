@@ -2,7 +2,9 @@
 #define BIEVR_LIO_INTENSITY_PROCESSOR_H_
 
 #include <Eigen/Core>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "bievr_lio/common.h"
 
@@ -10,25 +12,35 @@
 //
 // Per-frame per-point intensity normalization for irregular LiDAR scans:
 //   1. Spherical projection of the LiDAR-frame point cloud into a (w x h)
-//      intensity image (Eq. 1 of the COIN-BIEVR paper).
+//      intensity image (Eq. 1 of the COIN-BIEVR paper). The projection is
+//      abstracted behind projectPoint() so an Ouster factory LUT projector can
+//      later replace the spherical one without touching normalization / point
+//      back-assignment / the map pipeline.
 //   2. Optional Ouster line-artifact removal (vertical high-pass then
 //      horizontal low-pass, per COIN-LIO).
 //   3. Sparse brightness normalization: the brightness I_B is the average over
 //      a box window that only counts non-empty pixels
 //        I_F = s * I / (I_B + 1)
 //   4. Optional masked Gaussian blur, then clamp to [0, 255].
-//   5. The filtered value is written back to the per-point intensity channel of
-//      the *original* 3D point via the point->pixel index map.
+//   5. The normalized value I_F(v_i,u_i) is written back to *every* 3D point
+//      that projects into the image (via the point -> pixel map), not only to
+//      the nearest-point owner of each pixel. This keeps every map point and
+//      every photometric residual in the normalized intensity domain even when
+//      several points collide into the same image pixel.
 //
 // The output Intensities row is index-aligned with the input point cloud, so it
 // stays aligned with the (transformed / undistorted) spatial cloud downstream.
-// When multiple points project into the same pixel, the closest one (smallest
-// range) owns the pixel; all other points keep their raw (scaled) intensity.
+//
+// When config_.enabled == false (i.e. `intensity.preprocessing.enabled: false`)
+// the processor runs a debug/ablation bypass instead of returning an empty row:
+//   raw intensity -> raw_intensity_scale -> sanitize -> clamp [0,255],
+// keeping the point/intensity index alignment intact. This is NOT the COIN-BIEVR
+// paper default.
 
 namespace bievr {
 
 struct IntensityProcessorConfig {
-  bool enabled = true;
+  bool enabled = true;  // preprocessing enabled; false = debug bypass mode
 
   std::string projection = "spherical";  // "spherical" (Eq. 1) or "ouster_lut"
   int image_width = 1024;                // spherical image width [pix]
@@ -41,18 +53,39 @@ struct IntensityProcessorConfig {
 
   double normalization_scale = 140.0;  // s in I_F = s * I / (I_B + 1)
 
-  bool remove_lines = false;  // Ouster line-artifact removal (default: off)
+  bool remove_lines = false;   // Ouster line-artifact removal (default: off)
   bool gaussian_blur = false;  // masked Gaussian blur after normalization
 
   double raw_intensity_scale = 1.0;  // raw intensity scaling before projection
   bool use_ouster_lut = false;       // whether a factory point->pixel LUT is used
 };
 
-// Per-pixel result of the spherical projection of a single scan.
+// Per-pixel result of the projection of a single scan.
 struct ProjectedIntensityImage {
   Eigen::MatrixXf intensity;   // per-pixel intensity of the owning point
-  Eigen::MatrixXi point_index; // index into the input cloud, -1 = empty
+  Eigen::MatrixXi point_index; // pixel -> owner point, -1 = empty
+  Eigen::MatrixXf range;       // pixel -> owner range (nearest-point selection)
   Eigen::Matrix<uint8_t, Eigen::Dynamic, Eigen::Dynamic> valid;  // mask
+};
+
+// Per-frame result of intensity preprocessing.
+struct IntensityProcessingResult {
+  // Index-aligned filtered intensity (one value per input point).
+  Intensities filtered;
+
+  // Original point -> normalization image pixel (linear index v*width+u).
+  // -1 means the point could not be projected (defensive; with the clamped
+  // spherical projection every finite point is expected to be valid).
+  std::vector<int32_t> point_pixel_idx;
+
+  // Low-overhead diagnostics (computed during projection / back-assignment).
+  size_t num_valid = 0;          // points that received a filtered value
+  size_t num_unique_pixels = 0;  // occupied image pixels
+  size_t num_collisions = 0;     // points projected into an already-occupied pixel
+  size_t num_invalid = 0;        // points that could not be projected
+  double filtered_min = 0.0;     // min / max / mean of the filtered values
+  double filtered_max = 0.0;
+  double filtered_mean = 0.0;
 };
 
 // Produces per-point filtered intensities from a LiDAR-frame point cloud.
@@ -62,9 +95,17 @@ class IntensityProcessor {
   void configure(const IntensityProcessorConfig& config) { config_ = config; }
   const IntensityProcessorConfig& config() const { return config_; }
 
-  // Projects `points_L` (LiDAR frame), normalizes the intensity image and
-  // returns one filtered intensity value per input point, index-aligned.
-  Intensities process(const Pointcloud& points_L, const IntensityView& raw_intensity);
+  // Projects + normalizes and returns the per-point filtered intensities (see
+  // IntensityProcessingResult). Debug bypass when config_.enabled == false.
+  IntensityProcessingResult process(const Pointcloud& points_L,
+                                    const IntensityView& raw_intensity);
+
+  // Point -> image pixel projection. Clamps the elevation into the configured
+  // FOV so every finite point stays in the normalized domain (Scheme B of the
+  // second review; sensor-FOV mismatch is caught by the collision/range
+  // diagnostics instead of dropping points). Returns false only for non-finite
+  // or zero-range points.
+  bool projectPoint(const Point& p, int& u, int& v) const;
 
   // Exposed for unit testing / debugging: project + normalize without writeback.
   ProjectedIntensityImage project(const Pointcloud& points_L,
