@@ -9,13 +9,15 @@
 | Upstream repo | https://github.com/ethz-asl/BIEVR-LIO.git |
 | Baseline SHA | `21121698f273d6fbfffca57546b940edb1de2ff0` (`main`, "Merge pull request #5 from ethz-asl/feature/humble-ci") |
 | Branch | `coin_bievr` |
-| Implementation HEAD before documentation commit | `ef42b03ff63f01bf7c1d44630f7ac1f500e9e3d1` |
+| Implementation HEAD before documentation commit | `7ebd41d` (round-3; previous round-2 impl head was `ef42b03`) |
 | Backup branch | `coin_bievr_backup_before_rebase` @ `80c3a9f` (pre-reorganization full-state WIP commit, keeps the entire implementation in one place) |
 | Rebased from | clean `main` at baseline SHA |
 
 > Round 1 (commits 1-11, reviewed HEAD `5e93707`) covers the initial COIN-BIEVR
-> implementation. Round 2 (commits 12-16, this document's Implementation HEAD)
-> contains the second-review correctness fixes; see Section 7b below.
+> implementation. Round 2 (commits 12-16) contains the second-review correctness
+> fixes. Round 3 (commits 17-20, this document's Implementation HEAD) fixes the
+> bootstrap shared-weight issue, makes the COIN-BIEVR config a complete preset
+> and adds projection boundary diagnostics; see Section 7c below.
 
 ## 2. Commit Table
 
@@ -43,6 +45,15 @@ Round 2 commits (second review fixes, appended on top of the reviewed HEAD):
 | 14 | `fe51c0c` | fe51c0c | fix(map): reject misaligned intensity updates; zero intensity work when disabled |
 | 15 | `0e9093a` | 0e9093a | config: separate BIEVR baseline and COIN-BIEVR presets; Eq.8 score mode |
 | 16 | `ef42b03` | ef42b03 | test(intensity): cover collisions, bypass, misaligned, sign invariance, disabled |
+
+Round 3 commits (bootstrap + config + diagnostics, appended on top):
+
+| # | Commit | SHA | Subject |
+|---|---|---|---|
+| 17 | `2b3d0a2` | 2b3d0a2 | fix(pipeline): initialize intensity map through undistorted NeedMap path |
+| 18 | `8a8c5f0` | 8a8c5f0 | debug(intensity): report projection boundary clamping |
+| 19 | `4c8152c` | 4c8152c | fix(config): make COIN-BIEVR preset a complete algorithm config |
+| 20 | `7ebd41d` | 7ebd41d | test(intensity): bootstrap shared-weight + config smoke |
 
 ## 7b. Second Review Round (round-2 fixes)
 
@@ -81,6 +92,35 @@ and memory follow the original BIEVR path.
 `score_mode` ("abs_components" default / "paper_signed").
 
 **Tests.** Extended from 6 to 12 (see Section 6b).
+
+## 7c. Round 3 (bootstrap + config + diagnostics)
+
+**Bootstrap shared-weight fix (commit 17).** During bias initialization the old
+code built a geometry-only map when a cloud was already available, even with the
+intensity branch enabled. Because height and intensity share `bump_weights_`,
+that left pixels with `W(u,v) > 0` but intensity == 0, biasing every later
+weighted intensity average. With `intensity.enabled=true` the bias init now
+falls through to `Phase::NeedMap`, so the current frame is undistorted and the
+map is initialized jointly (full undistorted cloud + filtered intensity) in
+`tryInitMap()`. The `intensity.enabled=false` bootstrap is byte-for-byte
+unchanged.
+
+**Projection boundary diagnostics (commit 18).** `projectPoint()` returns the raw
+pixel; `clampPixel()` clamps and counts horizontal boundary adjustments (incl.
+the azimuth -pi wrap `u==W`), vertical top/bottom clamps. The vertical-clamp
+fraction is reported on the dashboard, and a log-once warning fires when >1% of
+points are clamped (likely FOV/image-size mismatch). Diagnostic only.
+
+**Complete COIN-BIEVR preset (commit 19).** `config/params_coin_bievr.yaml` is
+now a complete algorithm config (map/preprocess/optimization/imu/debug/
+max_num_threads/intensity) usable directly via `params:=params_coin_bievr`;
+sensor configs stay in `config/sensor_configs/`. Correct ROS1 usage:
+
+- BIEVR: `roslaunch bievr_lio_ros process_bag.launch sensor_config:=enwide params:=params rosbag:=...`
+- COIN-BIEVR: `roslaunch bievr_lio_ros process_bag.launch sensor_config:=enwide params:=params_coin_bievr rosbag:=...`
+
+**Tests.** Extended from 12 to 14 (`test_bootstrap_shared_weight`,
+`test_config_smoke`).
 
 ## 3. Per-commit Changed Files
 
@@ -133,9 +173,9 @@ and memory follow the original BIEVR path.
 
 ## 4. Diff Overview
 
-`git diff --stat 2112169..HEAD` — 29 files, +2863 / -83.
+`git diff --stat 2112169..HEAD` — 31 files, +3288 / -84.
 `git diff --name-status 2112169..HEAD` — 6 new headers/sources (intensity_processor,
-intensity_sampling), 12 tests (6 new), 13 modified + config preset.
+intensity_sampling), 14 tests (8 new), 14 modified + config presets.
 
 ## 5. Build Status
 
@@ -147,7 +187,7 @@ intensity_sampling), 12 tests (6 new), 13 modified + config preset.
 
 ## 6. Test Status
 
-CTest (`-DBIEVR_BUILD_TESTS=ON`): **12/12 pass**
+CTest (`-DBIEVR_BUILD_TESTS=ON`): **14/14 pass**
 
 Round-1 tests (6/6):
 
@@ -170,6 +210,13 @@ Round-2 tests (6 new, second review Section 16):
 | test_misaligned_intensity | size-mismatched intensity rejected; map not contaminated |
 | test_score_sign_invariance | Eq.8 abs_components score invariant to eigenvector sign |
 | test_intensity_disabled | intensity raster never allocated / info never computed when disabled |
+
+Round-3 tests (2 new):
+
+| Test | Verifies |
+|---|---|
+| test_bootstrap_shared_weight | intensity-OFF keeps geometry bootstrap; intensity-ON joint init gives ~100 (no zero-history bias); old geometry-only-then-intensity sequence is biased |
+| test_config_smoke | params.yaml and params_coin_bievr.yaml both parse completely (with a sensor config) via the ROS1 loader |
 
 ## 7. intensity.enabled=false Regression Status
 
