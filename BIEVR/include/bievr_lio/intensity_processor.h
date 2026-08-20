@@ -83,7 +83,13 @@ struct IntensityProcessingResult {
   size_t num_unique_pixels = 0;  // occupied image pixels
   size_t num_collisions = 0;     // points projected into an already-occupied pixel
   size_t num_invalid = 0;        // points that could not be projected
-  double filtered_min = 0.0;     // min / max / mean of the filtered values
+  // Projection boundary diagnostics (projectPoint returns the raw pixel; the
+  // clamp to the image edges is applied in process() and counted here).
+  size_t horizontal_boundary_adjusted = 0;  // u clamped to [0, W-1]
+  size_t horizontal_wrap_adjusted = 0;      // subset: u >= W (azimuth -pi wrap)
+  size_t vertical_top_clamped = 0;          // v < 0 -> 0
+  size_t vertical_bottom_clamped = 0;       // v >= H -> H-1
+  double filtered_min = 0.0;                // min / max / mean of the filtered values
   double filtered_max = 0.0;
   double filtered_mean = 0.0;
 };
@@ -100,11 +106,11 @@ class IntensityProcessor {
   IntensityProcessingResult process(const Pointcloud& points_L,
                                     const IntensityView& raw_intensity);
 
-  // Point -> image pixel projection. Clamps the elevation into the configured
-  // FOV so every finite point stays in the normalized domain (Scheme B of the
-  // second review; sensor-FOV mismatch is caught by the collision/range
-  // diagnostics instead of dropping points). Returns false only for non-finite
-  // or zero-range points.
+  // Point -> image pixel projection (raw, unclamped pixel). Returns false only
+  // for non-finite or zero-range points. The returned (u, v) may lie outside
+  // [0,W)x[0,H); clampPixel() (called by process/project) clamps it into the
+  // image and counts boundary adjustments, so a sensor-FOV / image-size mismatch
+  // shows up in the diagnostics instead of dropping points.
   bool projectPoint(const Point& p, int& u, int& v) const;
 
   // Exposed for unit testing / debugging: project + normalize without writeback.
@@ -120,6 +126,11 @@ class IntensityProcessor {
  private:
   // Sparse box-average brightness I_B = sum(M*I) / max(sum(M), 1).
   Eigen::MatrixXd brightnessImage(const ProjectedIntensityImage& image) const;
+
+  // Clamps a raw projected pixel into the image and reports how it was adjusted
+  // as a bitmask: 1 = horizontal (u), 2 = vertical top (v<0), 4 = vertical
+  // bottom (v>=H), 8 = horizontal wrap (u >= W, azimuth -pi boundary).
+  int clampPixel(int& u, int& v) const;
 
   // COIN-LIO line-artifact removal (vertical HPF then horizontal LPF).
   void removeLines(Eigen::MatrixXf& image, const Eigen::MatrixXi& mask) const;

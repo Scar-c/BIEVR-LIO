@@ -64,16 +64,29 @@ bool IntensityProcessor::projectPoint(const Point& p, int& u, int& v) const {
   const int H = config_.image_height;
   const double fov_rad = kPi * config_.vertical_fov_deg / 180.0;
 
+  // Raw pixel (may lie outside the image; clamped by the caller).
   u = static_cast<int>(std::lround(-W / (2.0 * kPi) * az + W / 2.0));
   v = static_cast<int>(std::lround(-H / fov_rad * el + H / 2.0));
-
-  // Clamp into the image (Scheme B): keep every finite point in the normalized
-  // domain. A sensor-FOV / image-size mismatch shows up in the collision
-  // diagnostics (points piling up on the boundary rows) instead of dropping
-  // points from the full-cloud map update.
-  u = std::max(0, std::min(W - 1, u));
-  v = std::max(0, std::min(H - 1, v));
   return true;
+}
+
+int IntensityProcessor::clampPixel(int& u, int& v) const {
+  const int W = config_.image_width;
+  const int H = config_.image_height;
+  int flags = 0;
+  if (u < 0 || u >= W) {
+    flags |= 1;                       // horizontal boundary
+    if (u >= W) flags |= 8;           // azimuth -pi wrap (u == W)
+    u = std::max(0, std::min(W - 1, u));
+  }
+  if (v < 0) {
+    flags |= 2;                       // vertical top
+    v = 0;
+  } else if (v >= H) {
+    flags |= 4;                       // vertical bottom
+    v = H - 1;
+  }
+  return flags;
 }
 
 ProjectedIntensityImage IntensityProcessor::project(const Pointcloud& points_L,
@@ -93,6 +106,7 @@ ProjectedIntensityImage IntensityProcessor::project(const Pointcloud& points_L,
   for (size_t i = 0; i < points_L.size(); ++i) {
     int u = 0, v = 0;
     if (!projectPoint(points_L[i], u, v)) continue;
+    clampPixel(u, v);
 
     const double r = points_L[i].norm();
     // Closest point owns the pixel.
@@ -262,6 +276,15 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
       ++out.num_invalid;
       continue;
     }
+
+    // Clamp into the image (Scheme B) and count boundary adjustments so a
+    // sensor-FOV / image-size mismatch is visible in the diagnostics instead of
+    // silently dropping or piling up points.
+    const int flags = clampPixel(u, v);
+    if (flags & 1) ++out.horizontal_boundary_adjusted;
+    if (flags & 8) ++out.horizontal_wrap_adjusted;
+    if (flags & 2) ++out.vertical_top_clamped;
+    if (flags & 4) ++out.vertical_bottom_clamped;
 
     const int linear = v * W + u;
     out.point_pixel_idx[i] = linear;

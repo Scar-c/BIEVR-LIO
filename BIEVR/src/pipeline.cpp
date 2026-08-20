@@ -146,6 +146,22 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     intensity_result = intensity_processor_.process(points_lidar, intensities);
     filtered_intensity = std::move(intensity_result.filtered);
     inten_timer.Stop();
+
+    // Low-frequency diagnostic (log once): a significant vertical-clamp fraction
+    // almost always means vertical_fov_deg / image size is misconfigured for the
+    // sensor. Diagnostic only; it does not change the estimator.
+    if (intensity_result.filtered.size() > 0 && !intensity_clamp_warned_) {
+      const double clamped_ratio =
+          static_cast<double>(intensity_result.vertical_top_clamped +
+                              intensity_result.vertical_bottom_clamped) /
+          static_cast<double>(intensity_result.filtered.size());
+      if (clamped_ratio > 0.01) {
+        LOG(W, "More than 1% of LiDAR points are being clamped to the intensity-image "
+               "vertical boundary (ratio " << clamped_ratio << "). Check vertical_fov_deg "
+               "and sensor-specific projection settings.");
+        intensity_clamp_warned_ = true;
+      }
+    }
   }
 
   if (phase_ == Phase::NeedBias) {
@@ -304,6 +320,16 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     stats.intensity_unique_pixels = static_cast<int>(intensity_result.num_unique_pixels);
     stats.intensity_collisions = static_cast<int>(intensity_result.num_collisions);
     stats.intensity_invalid = static_cast<int>(intensity_result.num_invalid);
+    stats.intensity_h_boundary =
+        static_cast<int>(intensity_result.horizontal_boundary_adjusted);
+    stats.intensity_v_top = static_cast<int>(intensity_result.vertical_top_clamped);
+    stats.intensity_v_bottom = static_cast<int>(intensity_result.vertical_bottom_clamped);
+    stats.intensity_v_clamped_ratio =
+        intensity_result.filtered.size() > 0
+            ? static_cast<double>(intensity_result.vertical_top_clamped +
+                                  intensity_result.vertical_bottom_clamped) /
+                  static_cast<double>(intensity_result.filtered.size())
+            : 0.0;
     stats.intensity_filtered_min = intensity_result.filtered_min;
     stats.intensity_filtered_max = intensity_result.filtered_max;
     stats.intensity_filtered_mean = intensity_result.filtered_mean;

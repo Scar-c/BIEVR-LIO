@@ -122,6 +122,11 @@ void printDashboard(DashboardState& state, uint64_t stamp_ns, const Transform& T
              std::to_string(stats.intensity_collisions) + "/" +
              std::to_string(stats.intensity_invalid))
       << "\n";
+  out << row("Intensity clamp h/top/bot [ratio] : " + std::to_string(stats.intensity_h_boundary) +
+             "/" + std::to_string(stats.intensity_v_top) + "/" +
+             std::to_string(stats.intensity_v_bottom) + " [" +
+             dashFmt(stats.intensity_v_clamped_ratio) + "]")
+      << "\n";
   out << row("Intensity filtered min/max/mean : " + dashFmt(stats.intensity_filtered_min) + " " +
              dashFmt(stats.intensity_filtered_max) + " " + dashFmt(stats.intensity_filtered_mean))
       << "\n";

@@ -99,6 +99,10 @@ struct FrameStats {
   int intensity_unique_pixels = 0;
   int intensity_collisions = 0;
   int intensity_invalid = 0;
+  int intensity_h_boundary = 0;  // u clamped (incl. azimuth -pi wrap)
+  int intensity_v_top = 0;       // v clamped to row 0
+  int intensity_v_bottom = 0;    // v clamped to last row
+  double intensity_v_clamped_ratio = 0.0;
   double intensity_filtered_min = 0.0;
   double intensity_filtered_max = 0.0;
   double intensity_filtered_mean = 0.0;

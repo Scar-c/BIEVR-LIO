@@ -123,6 +123,8 @@ class Pipeline {
   std::unique_ptr<BiasInitializer> bias_initializer_;
   std::shared_ptr<BIEVRMap> map_;
   IntensityProcessor intensity_processor_;  // COIN-BIEVR per-frame normalization
+  // Logged once: high vertical-clamp fraction suggests a wrong FOV/image size.
+  bool intensity_clamp_warned_ = false;
   V3 acc_bias_ = V3::Zero();
   V3 gyro_bias_ = V3::Zero();
   V3 gravity_dir_ = V3(0, 0, 1);
