@@ -9,7 +9,7 @@
 | Upstream repo | https://github.com/ethz-asl/BIEVR-LIO.git |
 | Baseline SHA | `21121698f273d6fbfffca57546b940edb1de2ff0` (`main`, "Merge pull request #5 from ethz-asl/feature/humble-ci") |
 | Branch | `coin_bievr` |
-| Implementation HEAD before documentation commit | `7b5c8ff` (round-4; round-3 impl head was `7ebd41d`) |
+| Implementation HEAD before documentation commit | `9b53153` (round-5; round-4 impl head was `7b5c8ff`) |
 | Backup branch | `coin_bievr_backup_before_rebase` @ `80c3a9f` (pre-reorganization full-state WIP commit, keeps the entire implementation in one place) |
 | Rebased from | clean `main` at baseline SHA |
 
@@ -19,7 +19,9 @@
 > the COIN-BIEVR config a complete preset and adds projection boundary
 > diagnostics. Round 4 (commits 21-25) fixes a config-loader bug, adds per-frame
 > intensity diagnostics + CSV export and runs the first real-data GEODE/Avia
-> preprocessing validation; see Section 7d below.
+> preprocessing validation. Round 5 (commits 26-30) adds photometric safety
+> validation (shadow diagnostics, maturity/warmup gating, lambda sweep); see
+> Section 7e below.
 
 ## 2. Commit Table
 
@@ -65,6 +67,15 @@ Round 4 commits (config-loader fix + diagnostics + tools, appended on top):
 | 22 | `8a0042d` | 8a0042d | fix(config): nested YAML resolution no longer mutates the document |
 | 23 | `e589c81` | e589c81 | feat(debug): per-frame intensity preprocessing diagnostics + CSV export |
 | 24 | `7b5c8ff` | 7b5c8ff | tools: round-4 intensity preprocessing analysis + window-sweep scripts |
+
+Round 5 commits (photometric safety validation, appended on top):
+
+| # | Commit | SHA | Subject |
+|---|---|---|---|
+| 26 | `67e4dd7` | 67e4dd7 | feat(registration): shadow photometric linearization + maturity/warmup gating + real-map FD check |
+| 27 | `b460750` | b460750 | feat(debug): per-frame photometric safety diagnostics CSV + pipeline wiring |
+| 28 | `e1bd9fc` | e1bd9fc | test(registration): cover shadow mode, photometric warmup and map-maturity gating |
+| 29 | `9b53153` | 9b53153 | tools: photometric safety analysis + round-5 sweep scripts |
 
 ## 7b. Second Review Round (round-2 fixes)
 
@@ -170,6 +181,42 @@ starting at bag begin (vehicle stationary -> IMU bias init valid):
 zero-velocity IMU bias init and makes BOTH baseline and COIN-BIEVR diverge -
 this is a data/init issue, not a code regression. Baseline on a properly
 initialized segment is stable on Shield 1.
+
+## 7e. Round 5 (photometric residual safety validation)
+
+See `results/photo_safety/avia_shield1/` (gitignored). Same 99 s GEODE/Avia
+segment (stationary init), 41x7 window frozen.
+
+**What was added.** Shadow photometric mode (`shadow_diagnostics`, photo
+residual/J/H/b computed but never merged), map-maturity gate (shared W >= 1.0),
+photometric warmup gate (`photometric_warmup_s`), per-frame photometric safety
+CSV, and a real-map finite-difference Jacobian spot check. `PhotometricDiagnostics`
+reports residual/gradient/J/H/b percentiles, per-DOF |J|, photo Hessian
+eigenvalues, unscaled H/b ratios, per-frame lambda_ref, the photo-induced LM
+step, and LM stability.
+
+**Key results (Shield 1, Avia):**
+- Shadow (C0): 969/992 frames with matches, ~255 valid matches/frame (mean),
+  residual |r| P50/P90/P95 = 31.7/72.4/90.5, gradient P50 ~334/m, J norm P50 ~
+  1245 (nonzero), Jdof P90 all nonzero (rz largest ~2310), unscaled
+  H_photo/H_geo ~ 48.7, lambda_ref (median) = 0.0453. Shadow does NOT change the
+  trajectory.
+- **Real-map FD Jacobian check: FAIL** - median relative error 3.53, P95 87.6
+  vs the required 1e-3 / 1e-2. The analytic central-difference photometric
+  Jacobian does not match the local finite-difference derivative on the real
+  texture (likely the 2-pixel central-difference gradient vs local bilinear
+  derivative on noisy/sparse texture). Per the round-5 gate, C-lambda is not
+  enabled.
+- Lambda sweep (trajectory stability only): L0 (lambda=0) stable (139 m), L1
+  (0.0045) stable (139 m), L2 (0.0136) stable (141 m), L3 (0.0453 = lambda_ref)
+  DIVERGED (855 m). LM iterations / reject rate unchanged vs C0; photo-induced
+  pose steps are small (P99 < 0.4 mm, max < 17 mm; rotation max < 0.19 deg).
+
+**Round-5 verdict.** Photometric residual safety NOT established: the real-map
+Jacobian FD gate fails, and at lambda_ref the trajectory diverges on Shield 1.
+Classification: C0/L0 SAFE; L1/L2 MARGINAL (stable trajectory, FD gate not met);
+L3 UNSAFE (diverged). Photometric_scale decision deferred to the coordinator;
+do not enable C-lambda until the Jacobian accuracy issue is resolved.
 
 ## 3. Per-commit Changed Files
 
