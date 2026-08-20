@@ -345,7 +345,9 @@ bool Pipeline::initializeBias(const std::vector<ImuMeasurement>& imu_data,
 
   if (pointcloud.empty()) {
     phase_ = Phase::NeedMap;
-  } else {
+  } else if (!config_.intensity.enabled) {
+    // Original BIEVR geometry-only bootstrap. Kept byte-for-byte equivalent to
+    // the intensity.enabled=false A/B baseline (21121698f273d6fbfffca57546b940edb1de2ff0).
     const Transform T_W_I_init(x_init.quat, x_init.p);
     std::vector<double> ranges(pointcloud.size(), 0.f);
     for (size_t i = 0; i < pointcloud.size(); ++i) {
@@ -353,6 +355,14 @@ bool Pipeline::initializeBias(const std::vector<ImuMeasurement>& imu_data,
     }
     map_->integratePoints(T_W_I_init * pointcloud, &ranges);
     phase_ = Phase::Running;
+  } else {
+    // COIN-BIEVR: do NOT build a geometry-only map during bias init. Height and
+    // intensity share the voxel weights (bump_weights_), so a geometry-only
+    // integratePoints would create pixels with W(u,v) > 0 but intensity == 0,
+    // biasing every later weighted intensity average. Instead fall through to
+    // NeedMap so the current frame is undistorted and the map is initialized
+    // jointly (geometry + filtered intensity) in tryInitMap().
+    phase_ = Phase::NeedMap;
   }
   return true;
 }
