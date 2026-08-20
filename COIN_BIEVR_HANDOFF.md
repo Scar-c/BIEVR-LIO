@@ -9,7 +9,7 @@
 | Upstream repo | https://github.com/ethz-asl/BIEVR-LIO.git |
 | Baseline SHA | `21121698f273d6fbfffca57546b940edb1de2ff0` (`main`, "Merge pull request #5 from ethz-asl/feature/humble-ci") |
 | Branch | `coin_bievr` |
-| Implementation HEAD before documentation commit | `d8ce276` (round-6; round-5 impl head was `9b53153`) |
+| Implementation HEAD before documentation commit | `fa207c7` (round-7; round-6 impl head was `d8ce276`) |
 | Backup branch | `coin_bievr_backup_before_rebase` @ `80c3a9f` (pre-reorganization full-state WIP commit, keeps the entire implementation in one place) |
 | Rebased from | clean `main` at baseline SHA |
 
@@ -20,10 +20,11 @@
 > diagnostics. Round 4 (commits 21-25) fixes a config-loader bug, adds per-frame
 > intensity diagnostics + CSV export and runs the first real-data GEODE/Avia
 > preprocessing validation. Round 5 (commits 26-30) adds photometric safety
-> validation (shadow diagnostics, maturity/warmup gating, lambda sweep) which
-> FAILED the real-map Jacobian FD gate. Round 6 (commits 31-34) fixes the
-> photometric derivative (exact masked-bilinear gradient) and validates it with
-> the three-level FD; see Section 7f below.
+> validation which FAILED the real-map Jacobian FD gate. Round 6 (commits 31-34)
+> fixes the photometric derivative (exact masked-bilinear gradient) and validates
+> it with the three-level FD (Level A/B PASS). Round 7 (commits 35-38) fixes the
+> robust-weighting semantics (removes the invalid lambda^2 unscaling) and runs the
+> first trustworthy C0-vs-C-lambda safety validation; see Section 7g below.
 
 ## 2. Commit Table
 
@@ -86,6 +87,14 @@ Round 6 commits (photometric derivative correctness, appended on top):
 | 31 | `f694db3` | f694db3 | fix(photo): use exact derivative of masked bilinear intensity sampling |
 | 32 | `5097649` | 5097649 | test(photo): validate exact interpolation and fixed-correspondence Jacobian |
 | 33 | `d8ce276` | d8ce276 | tools: analyze round-6 photometric derivative validation |
+
+Round 7 commits (robust weighting semantics + first C0-vs-C-lambda validation):
+
+| # | Commit | SHA | Subject |
+|---|---|---|---|
+| 35 | `c8ae0f2` | c8ae0f2 | fix(photo): remove invalid lambda-squared unscaling; direct robustified accumulation |
+| 36 | `e4abac4` | e4abac4 | test(photo): cover Huber-aware photometric scale semantics |
+| 37 | `fa207c7` | fa207c7 | tools: analyze round-7 photometric scale safety |
 
 ## 7b. Second Review Round (round-2 fixes)
 
@@ -261,6 +270,52 @@ resolved. No lambda sweep was performed in round 6.
 must independently address robust (Huber) weighting semantics and
 photometric_scale calibration before a first trustworthy C0-vs-C-lambda
 experiment.
+
+## 7g. Round 7 (robust weighting semantics & first C0-vs-C-lambda validation)
+
+**Round-5 lambda_ref invalidation.** Round-5 lambda_ref = 0.0453 is INVALID as a
+calibrated scale. COIN-BIEVR optimizes rho(lambda*r_photo); since the Huber
+weight depends on lambda*r, H_photo is piecewise lambda^2 (quadratic) / lambda
+(linear) scaled and cannot generally be recovered by H_photo/lambda^2.
+Round-7 therefore removes the /lambda^2 unscaling (R_H_unscaled, R_b_unscaled,
+lambda_ref are zeroed/DEPRECATED_INVALID) and uses DIRECT robustified
+accumulation at each lambda with the exact optimizer semantics.
+
+**Phase A (C0 robustified shadow scan, Shield1/Avia, photo OFF).** For each of
+9 lambdas, at the geometry-only solution the raw photo residual/J are
+re-accumulated with rho(lambda*r) and the direct H_photo/b_photo/cost, Huber
+inlier fraction, R_H and predicted pose influence are reported
+(results/photo_scale/avia_shield1/robust_shadow_scan.csv):
+
+| lambda | raw knee | inlier frac | R_H P90/P99/max | pred_t P99/max(mm) | pred_r P99/max(deg) | class |
+|---|---|---|---|---|---|---|
+| 0.0005 | 200 | 0.976 | 0.0074/0.014/0.021 | 0.37/0.76 | 0.0036/0.018 | SAFE |
+| 0.0010 | 100 | 0.932 | 0.028/0.053/0.084 | 1.19/2.06 | 0.012/0.059 | SAFE |
+| 0.0020 | 50 | 0.726 | 0.096/0.172/0.313 | 2.68/3.65 | 0.033/0.104 | SAFE |
+| 0.0030 | 33.3 | 0.519 | 0.180/0.316/0.662 | 3.49/4.92 | 0.038/0.113 | MARGINAL |
+| 0.0050 | 20 | 0.316 | 0.374/0.645/1.663 | 4.21/6.79 | 0.053/0.152 | UNSAFE |
+| 0.0100 | 10 | 0.152 | 0.946/1.71/5.84 | 4.84/9.02 | 0.074/0.237 | UNSAFE |
+| 0.0200 | 5 | 0.074 | 2.27/4.20/21.3 | 4.81/11.4 | 0.090/0.332 | UNSAFE |
+| 0.0300 | 3.3 | 0.049 | 3.70/6.83/46.4 | 4.78/12.5 | 0.104/0.369 | UNSAFE |
+| 0.0400 | 2.5 | 0.037 | 5.27/9.75/80.9 | 4.92/13.1 | 0.115/0.386 | UNSAFE |
+
+No lambda from Phase A entered the estimator solve.
+
+**Phase B (actual C-lambda, gated).** Per the round-7 gate, 0.010 was skipped
+(SHADOW_UNSAFE). C0 / 0.001 / 0.003 all ran on the same segment:
+
+| group | stable | path | reject | iter | R_H P90 | step_t P99/max(mm) | step_r P99/max(deg) | class |
+|---|---|---|---|---|---|---|---|---|
+| C0 | yes | 138.9 m | 0.722 | 4.0 | - | 0/0 | 0/0 | SAFE |
+| 0.001 | yes | 139.7 m | 0.688 | 4.5 | 0.028 | 0.18/1.41 | 0.0021/0.042 | SAFE |
+| 0.003 | yes | 141.5 m | 0.667 | 5.0 | 0.178 | 10.0/21.7 | 0.067/0.264 | SAFE |
+| 0.010 | skipped | - | - | - | - | - | - | SKIPPED_BY_GATE |
+
+C0-vs-C-lambda trajectory: rotation diff small (0.001: mean 0.21 deg; 0.003:
+mean 0.40 deg); translation diff ~0.46 m (0.001) / ~1.19 m (0.003) mean, largely
+a lever-arm effect of the small rotation offset over ~140 m (both paths stable,
+< 1.2x C0). Both 0.001 and 0.003 are classified SAFE on Shield1. This is the
+first trustworthy C0-vs-C-lambda data with correct derivative + robust semantics.
 
 ## 3. Per-commit Changed Files
 
