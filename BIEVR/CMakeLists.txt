@@ -35,6 +35,7 @@ add_library(${PROJECT_NAME}
   src/imu_integrator.cpp
   src/inertial_factor.cpp
   src/intensity_processor.cpp
+  src/intensity_sampling.cpp
   src/ls_optimizer.cpp
   src/preprocess.cpp
   src/prior_factor.cpp
