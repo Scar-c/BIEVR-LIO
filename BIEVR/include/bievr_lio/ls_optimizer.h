@@ -44,6 +44,10 @@ struct RegistrationConfig {
   double photometric_elapsed_s = 0.0;
   double photometric_min_map_weight = 1.0;
   bool photometric_fd_check = false;
+  // Round-7: in shadow mode, evaluate the DIRECT robustified photo contribution
+  // across the fixed lambda grid (no /lambda^2 unscaling; see
+  // runRobustShadowScan). Diagnostics only.
+  bool shadow_lambda_scan = false;
 };
 
 // Per-frame photometric safety diagnostics (round 5). Filled by the final
@@ -63,17 +67,20 @@ struct PhotometricDiagnostics {
   // Unscaled photometric Jacobian ||J_photo|| (1x6) and per-DOF |J|.
   double J_norm_p50 = 0, J_norm_p90 = 0, J_norm_p99 = 0, J_norm_max = 0;
   double J_dof_p90[6] = {0, 0, 0, 0, 0, 0};
-  // Hessian / gradient: photo quantities are lambda^2-scaled as accumulated by
-  // the Accumulator (r and J are scaled by lambda before add()).
+  // Hessian / gradient: photo quantities are accumulated as the real optimizer
+  // does (r and J scaled by lambda, then Huber IRLS in Accumulator::add), so
+  // H_photo is piecewise lambda^2 (quadratic region) / lambda (linear region).
   double H_geo_fro = 0.0, H_photo_fro = 0.0, H_photo_trace = 0.0;
   double b_geo_norm = 0.0, b_photo_norm = 0.0;
-  double R_H_unscaled = 0.0;  // (|H_photo|/lambda^2) / |H_geo|
-  double R_b_unscaled = 0.0;  // (|b_photo|/lambda^2) / |b_geo|
-  double R_H_scaled = 0.0;    // |H_photo| / |H_geo|  (at this run's lambda)
+  double R_H_scaled = 0.0;  // |H_photo| / |H_geo|  (direct, at this run's lambda)
+  // DEPRECATED_INVALID (round-7): these were computed by dividing H_photo /
+  // b_photo by lambda^2, which is only valid in the Huber quadratic region and
+  // must NOT be used as calibrated quantities. Kept as zeroed placeholders for
+  // CSV compatibility.
+  double R_H_unscaled = 0.0;  // DEPRECATED_INVALID
+  double R_b_unscaled = 0.0;  // DEPRECATED_INVALID
+  double lambda_ref = 0.0;    // DEPRECATED_INVALID
   Eigen::Matrix<double, 6, 1> photo_eigenvalues = Eigen::Matrix<double, 6, 1>::Zero();
-  // Per-frame Hessian-balance reference scale (lambda such that
-  // lambda^2*|H_photo|_unscaled ~ 0.1*|H_geo|). 0 if no valid ratio.
-  double lambda_ref = 0.0;
   // Photo-induced pose step difference (C-lambda only; 0 for shadow).
   double photo_step_translation_m = 0.0;
   double photo_step_rotation_deg = 0.0;
@@ -110,6 +117,23 @@ struct PhotometricDiagnostics {
   double fd_level_c_validity_switch = 0.0;
   int fd_level_c_noswitch_samples = 0;
   double fd_level_c_noswitch_median = 0.0, fd_level_c_noswitch_p95 = 0.0;
+};
+
+// Round-7: per-(lambda, frame) evaluation of the DIRECT robustified photometric
+// contribution at the geometry-only LM solution (shadow; never enters solve).
+struct PhotoScaleEvaluation {
+  double lambda = 0.0;
+  double raw_huber_knee = 0.0;            // huber_delta / lambda
+  double huber_inlier_fraction = 0.0;     // |lambda*r| <= huber_delta
+  double H_photo_fro = 0.0;
+  double H_geo_fro = 0.0;
+  double R_H = 0.0;                       // |H_photo| / |H_geo| (direct)
+  double b_photo_norm = 0.0;
+  double b_geo_norm = 0.0;
+  double photo_cost = 0.0;                // sum rho(lambda*r)
+  double geo_cost = 0.0;
+  double pred_translation_m = 0.0;        // |d_joint - d_geo| (translation)
+  double pred_rotation_deg = 0.0;         // AngleAxis angle of (d_joint - d_geo)
 };
 
 // Bilinear sample of `image` at subpixel (x, y). `weights` acts as the
@@ -459,7 +483,18 @@ class LsqRegistration {
   void runLevelAFd(const Transform& T_W_L);
   void runLevelBFd(const Transform& T_W_L);
   void runLevelCFd(const Transform& T_W_L);
+  // Round-7: direct robustified photometric contribution across the fixed
+  // lambda grid at the geometry-only solution (shadow only, never merges).
+  void runRobustShadowScan(const Accumulator& geo_acc);
 
+ public:
+  // Per-frame results of the round-7 robust shadow lambda scan (one entry per
+  // grid lambda), populated when config_.shadow_lambda_scan is enabled.
+  const std::vector<PhotoScaleEvaluation>& robustShadowScan() const {
+    return robust_scan_frame_;
+  }
+
+ private:
   // Per-match sample collected by the final photometric linearization.
   struct PhotoSample {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -470,6 +505,8 @@ class LsqRegistration {
     double grad_norm = 0.0;  // intensity gradient magnitude (per meter)
   };
   std::vector<PhotoSample> photo_samples_;
+  // Round-7 per-frame robust shadow lambda scan results (one per grid lambda).
+  std::vector<PhotoScaleEvaluation> robust_scan_frame_;
 
   RegistrationConfig config_;
   double lm_lambda_ = -1.0;

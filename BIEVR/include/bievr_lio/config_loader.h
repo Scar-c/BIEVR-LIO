@@ -382,6 +382,9 @@ inline bool loadConfigFromYaml(const std::vector<std::string>& yaml_paths, Confi
       yaml.get<std::string>("debug", "intensity_diagnostics_path", "");
   // Optional per-frame photometric safety diagnostics CSV (round-5). Empty = disabled.
   hc.photo_diagnostics_path = yaml.get<std::string>("debug", "photo_diagnostics_path", "");
+  // Optional per-(lambda, frame) robust shadow scan CSV (round-7). Empty = disabled.
+  hc.robust_shadow_scan_path =
+      yaml.get<std::string>("debug", "robust_shadow_scan_path", "");
 
   // --- dashboard (live status print) ---
   hc.print_dashboard = yaml.get<bool>("debug", "dashboard", false);

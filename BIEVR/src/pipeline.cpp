@@ -162,6 +162,21 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
       photo_diag_csv_.reset();
     }
   }
+
+  // Optional per-(lambda, frame) robust shadow scan CSV (round-7).
+  if (!config_.robust_shadow_scan_path.empty()) {
+    robust_scan_csv_ =
+        std::make_shared<std::ofstream>(config_.robust_shadow_scan_path, std::ios::trunc);
+    if (robust_scan_csv_->is_open()) {
+      *robust_scan_csv_
+          << "stamp,lambda,raw_huber_knee,huber_inlier_fraction,H_photo_fro,H_geo_fro,R_H,"
+             "b_photo_norm,b_geo_norm,photo_cost,geo_cost,pred_t_m,pred_r_deg\n";
+    } else {
+      LOG(E, "Failed to open robust shadow scan CSV at "
+                 << config_.robust_shadow_scan_path);
+      robust_scan_csv_.reset();
+    }
+  }
 }
 
 void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
@@ -321,6 +336,11 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   reg_config.photometric_fd_check =
       intensity_enabled && config_.intensity.shadow_diagnostics &&
       config_.intensity.optimization_enabled == false;
+  // Round-7: direct robustified photometric contribution across the fixed
+  // lambda grid (shadow only; never merges into the solve).
+  reg_config.shadow_lambda_scan =
+      intensity_enabled && config_.intensity.shadow_diagnostics &&
+      config_.intensity.optimization_enabled == false;
   // With the master switch off we use the geometry-only constructor so the
   // photometric source is never constructed / accumulated.
   LsqRegistration optimizer =
@@ -429,6 +449,11 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   if (photo_diag_csv_ && (reg_config.photometric_residual || reg_config.shadow_photometric)) {
     writePhotometricDiagnostics(header.stamp, optimizer.photometricDiagnostics());
   }
+
+  // Per-(lambda, frame) robust shadow scan CSV (round-7, debug config only).
+  if (robust_scan_csv_ && reg_config.shadow_lambda_scan) {
+    writeRobustShadowScan(header.stamp, optimizer.robustShadowScan());
+  }
 }
 
 void Pipeline::writeIntensityDiagnostics(uint64_t stamp, const IntensityProcessingResult& result,
@@ -500,6 +525,18 @@ void Pipeline::writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiag
                    << d.fd_level_c_voxel_switch << "," << d.fd_level_c_cell_switch << ","
                    << d.fd_level_c_validity_switch << "," << d.fd_level_c_noswitch_samples << ","
                    << d.fd_level_c_noswitch_median << "," << d.fd_level_c_noswitch_p95 << "\n";
+}
+
+void Pipeline::writeRobustShadowScan(uint64_t stamp,
+                                     const std::vector<PhotoScaleEvaluation>& scan) {
+  if (!robust_scan_csv_) return;
+  for (const auto& e : scan) {
+    *robust_scan_csv_ << stamp << "," << e.lambda << "," << e.raw_huber_knee << ","
+                      << e.huber_inlier_fraction << "," << e.H_photo_fro << "," << e.H_geo_fro
+                      << "," << e.R_H << "," << e.b_photo_norm << "," << e.b_geo_norm << ","
+                      << e.photo_cost << "," << e.geo_cost << "," << e.pred_translation_m << ","
+                      << e.pred_rotation_deg << "\n";
+  }
 }
 
 bool Pipeline::initializeBias(const std::vector<ImuMeasurement>& imu_data,

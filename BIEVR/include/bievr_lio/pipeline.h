@@ -58,6 +58,8 @@ class Pipeline {
     // Optional per-frame photometric safety diagnostics CSV (round-5).
     // Empty = disabled. Diagnostics only.
     std::string photo_diagnostics_path = "";
+    // Optional per-(lambda, frame) robust shadow scan CSV (round-7). Empty = disabled.
+    std::string robust_shadow_scan_path = "";
 
     size_t min_points_for_map_init = 100;
     size_t map_size_running_threshold = 5;
@@ -107,6 +109,9 @@ class Pipeline {
   // config_.photo_diagnostics_path is non-empty and photo work is requested.
   void writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiagnostics& diag);
 
+  // Writes one row per (frame, lambda) of the round-7 robust shadow scan.
+  void writeRobustShadowScan(uint64_t stamp, const std::vector<PhotoScaleEvaluation>& scan);
+
   // State and optimization management
   bool addState(const uint64_t time, const Quaternion& quat, const V3& p, const V3& v);
   bool addImuIntegrator(ImuIntegratorPtr imu_integrator);
@@ -153,6 +158,8 @@ class Pipeline {
   std::shared_ptr<std::ofstream> intensity_hist_csv_;
   // Optional per-frame photometric safety diagnostics CSV (round-5).
   std::shared_ptr<std::ofstream> photo_diag_csv_;
+  // Optional per-(lambda, frame) robust shadow scan CSV (round-7).
+  std::shared_ptr<std::ofstream> robust_scan_csv_;
   // Stamp when the pipeline entered Phase::Running (used by the photometric
   // warmup gate). 0 = not yet running.
   uint64_t running_start_time_ = 0;

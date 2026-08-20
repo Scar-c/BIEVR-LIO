@@ -192,6 +192,9 @@ Transform LsqRegistration::computeTransformation(const Transform& T_W_L_init) {
     if (config_.photometric_fd_check) {
       runPhotoFdDiagnostics(x0);
     }
+    if (config_.shadow_lambda_scan) {
+      runRobustShadowScan(final_geo_acc_);
+    }
   }
 
   return x0;
@@ -599,19 +602,13 @@ void LsqRegistration::finalizePhotoDiagnostics(const Transform& T_W_L,
   d.b_photo_norm = photo_acc.b.norm();
   d.R_H_scaled = d.H_geo_fro > 0 ? d.H_photo_fro / d.H_geo_fro : 0.0;
 
-  const double lambda = config_.photometric_scale;
-  const double lambda_sq = lambda * lambda;
-  if (lambda_sq > 0.0) {
-    const double H_photo_unscaled = d.H_photo_fro / lambda_sq;
-    const double b_photo_unscaled = d.b_photo_norm / lambda_sq;
-    d.R_H_unscaled = d.H_geo_fro > 0 ? H_photo_unscaled / d.H_geo_fro : 0.0;
-    d.R_b_unscaled = d.b_geo_norm > 0 ? b_photo_unscaled / d.b_geo_norm : 0.0;
-    // Per-frame Hessian-balance reference: lambda such that
-    // lambda^2 * |H_photo|_unscaled ~ 0.1 * |H_geo|.
-    if (d.R_H_unscaled > 0.0) {
-      d.lambda_ref = std::sqrt(0.1 / d.R_H_unscaled);
-    }
-  }
+  // Round-7: the previous /lambda^2 unscaling (R_H_unscaled / R_b_unscaled /
+  // lambda_ref) is INVALID because the Huber weight depends on lambda*r, making
+  // H_photo piecewise lambda^2 (quadratic) / lambda (linear) scaled. These
+  // fields are kept only as zeroed placeholders (DEPRECATED_INVALID).
+  d.R_H_unscaled = 0.0;
+  d.R_b_unscaled = 0.0;
+  d.lambda_ref = 0.0;
 
   // Photo Hessian eigenvalues (ascending), on the lambda-scaled Hessian.
   Eigen::SelfAdjointEigenSolver<Matrix66> eig(photo_acc.H);
@@ -952,6 +949,58 @@ void LsqRegistration::runLevelCFd(const Transform& T_W_L) {
         fd_c_noswitch_errors_.push_back(normErr(s.J(0, dof), J_num));
       }
     }
+  }
+}
+
+void LsqRegistration::runRobustShadowScan(const Accumulator& geo_acc) {
+  robust_scan_frame_.clear();
+  // Fixed lambda grid (round-7; shadow evaluation only).
+  constexpr double kGrid[] = {0.0005, 0.001, 0.002, 0.003, 0.005, 0.010, 0.020, 0.030, 0.040};
+  const double delta = config_.huber_delta;
+  const double mu = lm_lambda_ >= 0.0 ? lm_lambda_ : 0.0;
+  const Matrix66 Hg = geo_acc.H;
+  const Vector6 bg = geo_acc.b;
+  const double Hg_fro = Hg.norm();
+  const double bg_norm = bg.norm();
+
+  for (const double lambda : kGrid) {
+    PhotoScaleEvaluation ev;
+    ev.lambda = lambda;
+    ev.raw_huber_knee = delta / lambda;
+    ev.H_geo_fro = Hg_fro;
+    ev.b_geo_norm = bg_norm;
+    ev.geo_cost = geo_acc.error_sum;
+
+    // DIRECT robustified accumulation, exactly as the real optimizer does
+    // (rho(lambda*r): scaled residual/J, then Huber IRLS in Accumulator::add).
+    Accumulator acc;
+    acc.huber_delta = delta;
+    int inlier = 0;
+    for (const auto& s : photo_samples_) {
+      const double r = lambda * s.r;
+      const Row6 J = lambda * s.J;
+      if (std::abs(r) <= delta) ++inlier;
+      acc.add(r, &J);
+    }
+    ev.H_photo_fro = acc.H.norm();
+    ev.b_photo_norm = acc.b.norm();
+    ev.photo_cost = acc.error_sum;
+    ev.huber_inlier_fraction =
+        photo_samples_.empty() ? 0.0 : static_cast<double>(inlier) / photo_samples_.size();
+    ev.R_H = Hg_fro > 0 ? ev.H_photo_fro / Hg_fro : 0.0;
+
+    // Shadow predicted pose influence: joint step vs geometry-only step at the
+    // geometry-only solution. Never updates the pose.
+    Eigen::LDLT<Matrix66> g_solver(Hg + mu * Matrix66::Identity());
+    Eigen::LDLT<Matrix66> j_solver(Hg + acc.H + mu * Matrix66::Identity());
+    const Vector6 dg = g_solver.solve(-bg);
+    const Vector6 dj = j_solver.solve(-(bg + acc.b));
+    const Vector6 dphoto = dj - dg;
+    ev.pred_translation_m = dphoto.tail<3>().norm();
+    const Eigen::AngleAxisd aa(so3_exp(dphoto.head<3>()).toRotationMatrix());
+    ev.pred_rotation_deg = std::abs(aa.angle()) * 180.0 / M_PI;
+
+    robust_scan_frame_.push_back(ev);
   }
 }
 
