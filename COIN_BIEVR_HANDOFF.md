@@ -363,6 +363,65 @@ tuning, no preprocessing changes, no FlatSurfacesS re-runs. The likely causes
 intensity-map consistency under a drifting geometry pose) are for the
 coordinator to adjudicate.
 
+## 7i. Round 9 (production photometric Jacobian parity fix + revalidation)
+
+**P0 root cause CONFIRMED.** The production parallel LM path in
+`BIEVR/src/ls_optimizer.cpp` multiplied the photometric gradient by `inv_size`
+TWICE (`photo_grad *= inv_size; photo_grad *= inv_size;`), while the serial
+diagnostic path (and therefore the Round-6 FD validation and the Round-7 shadow
+scan) multiplied only once. With pixel_size 0.05 m, `inv_size = 20`, so the
+production `J_photo` was 20x too large, `H_photo` 400x too large and `b_photo`
+20x too large. **This is the primary explanation for the Round-8 FlatSurfacesS
+catastrophic divergence** (shadow diagnostics looked controlled because they
+always used the correct serial J; the actual LM used the wrong one).
+
+**Fix:** extracted a single shared per-point helper `evaluatePhotometricTerm()`
+used by the serial diagnostic path, the parallel production accumulator and
+(through the serial path) the FD diagnostics; removed the duplicate `inv_size`.
+New `runPhotometricParity()` + `test_photometric_production_parity` enforce
+serial-vs-production count/cost/H/b parity (synthetic: cost_rel/H_rel/b_rel all
+~1e-16; regression sensitivity CONFIRMED - reintroducing the extra inv_size in
+production gives H_rel=399, b_rel=19 and the test fails).
+
+**Round-8 L1/L2 conclusions INVALIDATED** (kept, not deleted):
+```
+Round-8 B0 and C0 remain valid geometry/photo-OFF observations.
+Round-8 L1/L2 photometric-optimization results are INVALIDATED for algorithmic
+interpretation because the production LM photometric Jacobian contained an extra
+inv_px_size factor that was absent from the validated diagnostic/shadow path.
+```
+Round-6 exact derivative validation, Round-7 robust semantics, Round-7 shadow
+scan, Round-8 B0 and Round-8 C0 remain **still valid**. Round-7 actual C-lambda
+trajectory safety and Round-8 L1/L2 actual trajectories must be revalidated /
+invalidated.
+
+**Phase A — Shield1 corrected production (photo_parity_round9/shield1):**
+S-C0 shadow serial-vs-production parity on real data: cost/H/b relative errors
+P50 ~2e-16, P99 < 3e-15, max < 7e-15 (gates P50<1e-10/P99<1e-8/max<1e-7 PASS).
+Robust shadow scan essentially unchanged vs Round-7 (root-cause confirmation).
+S-L1 (0.001): stable, path 139.2 m, APE 0.260 m, R_H P50 0.00038 -> SAFE.
+S-L2 (0.003): stable, path 139.3 m, APE 0.284 m, R_H P50 0.0029 -> SAFE.
+Round-7 actual safety results treated as: **REVALIDATED**.
+
+**Phase B — FlatSurfacesS corrected production (photo_parity_round9/flatsurfaces):**
+F-C0 APE 1.6547 m (exactly reproduces Round-8 C0; parity machine precision).
+**Catastrophic divergence eliminated**: F-L1 (0.001) APE RMSE **0.0625 m**, path
+31.7 m, no divergence; F-L2 (0.003) APE RMSE **0.0619 m**, path 32.2 m, no
+divergence. vs Round-8 821.9 m / 2232 m. **Photometric rescue = YES (STRONG)**:
+APE < 0.5 m; both values sit essentially AT the paper's COIN-BIEVR FlatSurfacesS
+ATE of 0.064 m (exact paper-number reproduction NOT claimed). R_H is unchanged
+from Round-8 shadow values (serial diagnostics always used the correct J).
+
+Weak-direction audit (L1): two-weak fraction 0.857; eta abs-dot-prev P50 0.993
+(but P1 0.005 -> occasional jumps); weak SUBSPACE very stable (||dP||_F P50
+0.0218); top-100 Jaccard P50 0.82; photo Hessian exceeds geometry Hessian in the
+weak directions (q_photo/q_geo v1 P50 4.49, v2 P50 1.34) -> the photo term
+supplies information in both plane weak directions, the mechanism of the rescue.
+
+Per round-9 rules this is the stopping point: no lambda/window/preprocessing
+tuning, no further datasets, no Eq.7/8 audit changes (diagnostics only). Final
+lambda selection (0.001 vs 0.003) and next steps are deferred to the coordinator.
+
 ## 3. Per-commit Changed Files
 
 **1. `460a04a` refactor(map): MapPoint**
