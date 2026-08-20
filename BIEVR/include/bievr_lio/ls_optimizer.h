@@ -28,6 +28,68 @@ struct RegistrationConfig {
   // value (Section 55 of the reproduction plan).
   bool photometric_residual = false;
   double photometric_scale = 1.0;
+  // Round-5 photometric safety (engineering safeguards / TBD, not paper params):
+  //   shadow_photometric: compute photo residual/J/H/b diagnostics WITHOUT
+  //     merging into the LM solve (used by the C0 shadow run; never changes
+  //     the trajectory).
+  //   photometric_warmup_s / photometric_elapsed_s: photo residual enters the
+  //     LM only after the pipeline has been in Running for photometric_warmup_s
+  //     seconds (photometric_elapsed_s is set per frame by the pipeline).
+  //   photometric_min_map_weight: map-maturity gate; a photo match is only used
+  //     when the (shared) voxel weight W(u,v) >= this value.
+  //   photometric_fd_check: run a real-map finite-difference Jacobian spot
+  //     check on a sample of matches (round-5 validation; off by default).
+  bool shadow_photometric = false;
+  double photometric_warmup_s = 0.0;
+  double photometric_elapsed_s = 0.0;
+  double photometric_min_map_weight = 1.0;
+  bool photometric_fd_check = false;
+};
+
+// Per-frame photometric safety diagnostics (round 5). Filled by the final
+// linearization of LsqRegistration::computeTransformation() when any photo work
+// is requested (shadow or real). See the round-5 instruction for definitions.
+struct PhotometricDiagnostics {
+  // Coverage
+  int candidates = 0;        // intensity source points considered
+  int valid_matches = 0;     // mature matches that produced a residual
+  int immature_matches = 0;  // skipped by the map-maturity gate
+  double match_ratio = 0.0;  // valid_matches / candidates
+  // Unscaled photometric residuals r = I_i - I_P (intensity units, 0..255).
+  double r_abs_p50 = 0, r_abs_p75 = 0, r_abs_p90 = 0, r_abs_p95 = 0, r_abs_max = 0;
+  double r_signed_median = 0;
+  // Intensity-map gradient magnitude (per meter).
+  double grad_p50 = 0, grad_p75 = 0, grad_p90 = 0, grad_p95 = 0;
+  // Unscaled photometric Jacobian ||J_photo|| (1x6) and per-DOF |J|.
+  double J_norm_p50 = 0, J_norm_p90 = 0, J_norm_p99 = 0, J_norm_max = 0;
+  double J_dof_p90[6] = {0, 0, 0, 0, 0, 0};
+  // Hessian / gradient: photo quantities are lambda^2-scaled as accumulated by
+  // the Accumulator (r and J are scaled by lambda before add()).
+  double H_geo_fro = 0.0, H_photo_fro = 0.0, H_photo_trace = 0.0;
+  double b_geo_norm = 0.0, b_photo_norm = 0.0;
+  double R_H_unscaled = 0.0;  // (|H_photo|/lambda^2) / |H_geo|
+  double R_b_unscaled = 0.0;  // (|b_photo|/lambda^2) / |b_geo|
+  double R_H_scaled = 0.0;    // |H_photo| / |H_geo|  (at this run's lambda)
+  Eigen::Matrix<double, 6, 1> photo_eigenvalues = Eigen::Matrix<double, 6, 1>::Zero();
+  // Per-frame Hessian-balance reference scale (lambda such that
+  // lambda^2*|H_photo|_unscaled ~ 0.1*|H_geo|). 0 if no valid ratio.
+  double lambda_ref = 0.0;
+  // Photo-induced pose step difference (C-lambda only; 0 for shadow).
+  double photo_step_translation_m = 0.0;
+  double photo_step_rotation_deg = 0.0;
+  // LM stability
+  int lm_iterations = 0;
+  int lm_trial_steps = 0, lm_accepted = 0, lm_rejected = 0;
+  double reject_rate = 0.0;
+  double lm_initial_cost = 0.0, lm_final_cost = 0.0;
+  double geo_cost = 0.0, photo_cost = 0.0;
+  double pose_delta_translation_m = 0.0, pose_delta_rotation_deg = 0.0;
+  int photo_effective_residuals = 0;
+  double photometric_scale = 0.0;
+  // Real-map finite-difference Jacobian check (aggregated across frames).
+  int fd_samples = 0;
+  double fd_median_rel_err = 0.0, fd_p95_rel_err = 0.0;
+  bool fd_done = false;
 };
 
 // Bilinear sample of `image` at subpixel (x, y). `weights` acts as the
@@ -272,16 +334,38 @@ class LsqRegistration {
   // photometric residual for the photometric one).
   double geometryRMSE() const { return geometry_rmse_; }
   double photometricRMSE() const { return photometric_rmse_; }
+  // Round-5 photometric safety diagnostics of the final pose linearization.
+  const PhotometricDiagnostics& photometricDiagnostics() const { return photo_diag_; }
 
  private:
   bool isConverged(const Transform& delta) const;
 
   double linearizeGeometry(const Transform& T_W_L, bool compute_jacobians, Accumulator& acc) const;
-  double linearizePhotometric(const Transform& T_W_L, bool compute_jacobians,
-                              Accumulator& acc) const;
-  double linearize(const Transform& T_W_L, Matrix66* H = nullptr, Vector6* b = nullptr);
+  // Non-const: with collect_stats it also fills photo_diag_ / photo_samples_
+  // (run serially to avoid data races on the shared sample vector).
+  double linearizePhotometric(const Transform& T_W_L, bool compute_jacobians, Accumulator& acc,
+                              bool collect_stats);
+  double linearize(const Transform& T_W_L, Matrix66* H = nullptr, Vector6* b = nullptr,
+                   bool collect_photo_stats = false);
 
-  bool stepLm(Transform& x0, Transform& delta);
+  bool stepLm(Transform& x0, Transform& delta, bool& accepted);
+
+  // Round-5: final-pose photo diagnostics, photo-induced step and the
+  // finite-difference Jacobian spot check.
+  void finalizePhotoDiagnostics(const Transform& T_W_L, const Accumulator& geo_acc,
+                                const Accumulator& photo_acc);
+  void runPhotoFdCheck(const Transform& T_W_L);
+
+  // Per-match sample collected by the final photometric linearization.
+  struct PhotoSample {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    Eigen::Vector3d p_j;   // source point (IMU frame)
+    double I_i = 0.0;      // source filtered intensity
+    double r = 0.0;        // unscaled residual I_i - I_P
+    Eigen::Matrix<double, 1, 6> J = Eigen::Matrix<double, 1, 6>::Zero();  // unscaled analytic J
+    double grad_norm = 0.0;  // intensity gradient magnitude (per meter)
+  };
+  std::vector<PhotoSample> photo_samples_;
 
   RegistrationConfig config_;
   double lm_lambda_ = -1.0;
@@ -297,6 +381,10 @@ class LsqRegistration {
   int num_photometric_effective_points_ = 0;
   double geometry_rmse_ = 0.0;
   double photometric_rmse_ = 0.0;
+  PhotometricDiagnostics photo_diag_;
+  std::vector<double> fd_rel_errors_;  // pooled FD relative errors across frames
+  Accumulator final_geo_acc_;   // final-pose geometry accumulator (round-5 diag)
+  Accumulator final_photo_acc_; // final-pose photometric accumulator (round-5 diag)
 };
 
 }  // namespace bievr
