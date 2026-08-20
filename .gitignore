@@ -1,0 +1,3 @@
+# Round-4 validation outputs: rosbag segments, per-frame diagnostics CSVs,
+# histograms, trajectories and summaries. Never commit these (large/transient).
+results/
