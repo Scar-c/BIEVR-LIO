@@ -49,27 +49,27 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
 
   LOG(D, "Integrating " << cloud.size() << " points to the map.");
 
-  // Each entry is {voxel hash, point (xyz, plus range/weight in w)}.
-  std::vector<std::pair<size_t, Eigen::Vector4d>> hashed_points(cloud.size());
+  // Each entry is {voxel hash, map point (xyz + range for weighting)}.
+  std::vector<std::pair<size_t, MapPoint>> hashed_points(cloud.size());
 
   // Calculate Hash indices for each point
   tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud.size()),
                     [&](const tbb::blocked_range<size_t>& r) {
                       for (size_t i = r.begin(); i != r.end(); ++i) {
-                        hashed_points[i].second.head(3) = cloud[i];
+                        hashed_points[i].second.p_W = cloud[i];
                         if (ranges) {
-                          hashed_points[i].second(3) = (*ranges)[i];  // weight by range
+                          hashed_points[i].second.range = (*ranges)[i];  // weight by range
                         } else {
-                          hashed_points[i].second(3) = 1;
+                          hashed_points[i].second.range = 1;
                         }
-                        hashed_points[i].first = hashIndex(hashed_points[i].second.head(3));
+                        hashed_points[i].first = hashIndex(hashed_points[i].second.p_W);
                       }
                     });
 
   // Group points by voxel; tie-break on x for a deterministic order within each voxel.
   tbb::parallel_sort(hashed_points.begin(), hashed_points.end(), [](const auto& a, const auto& b) {
     if (a.first != b.first) return a.first < b.first;
-    return a.second(0) < b.second(0);
+    return a.second.p_W(0) < b.second.p_W(0);
   });
 
   // Extract unique hash indices
@@ -98,7 +98,7 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, hash_change_indices.size()),
       [&](const tbb::blocked_range<size_t>& r) {
-        std::vector<Eigen::Vector4d> voxel_points;
+        std::vector<MapPoint> voxel_points;
         for (size_t i = r.begin(); i != r.end(); ++i) {
           int start_idx = hash_change_indices[i];
           int end_idx = (i + 1 < hash_change_indices.size()) ? hash_change_indices[i + 1]
@@ -110,10 +110,10 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
           voxel_points.clear();
           voxel_points.reserve(end_idx - start_idx);
           for (size_t j = start_idx; j < end_idx; ++j) {
-            iter->second.voxel.sum_ += hashed_points[j].second.head(3);
+            iter->second.voxel.sum_ += hashed_points[j].second.p_W;
             iter->second.voxel.num_points_++;
             iter->second.voxel.outer_sum_ +=
-                hashed_points[j].second.head(3) * hashed_points[j].second.head(3).transpose();
+                hashed_points[j].second.p_W * hashed_points[j].second.p_W.transpose();
             voxel_points.emplace_back(hashed_points[j].second);
           }
 
@@ -200,7 +200,7 @@ bool BIEVRMap::updateNormal(Voxel& voxel) {
   return update_normal;
 }
 
-bool BIEVRMap::updateBumpImage(const std::vector<Eigen::Vector4d>& points, Voxel& voxel,
+bool BIEVRMap::updateBumpImage(const std::vector<MapPoint>& points, Voxel& voxel,
                                bool normal_change) {
   if (!voxel.observed_) {
     return false;
@@ -209,7 +209,7 @@ bool BIEVRMap::updateBumpImage(const std::vector<Eigen::Vector4d>& points, Voxel
   Eigen::MatrixXi changed;
   if (normal_change) {
     // If the normal has changed, we reproject the surface from the old image into the new image
-    ImageBounds bounds = computeImageSize(voxel, points[0].head<3>());
+    ImageBounds bounds = computeImageSize(voxel, points[0].p_W);
     reprojectImage(voxel, bounds, changed);
   } else {
     changed = Eigen::MatrixXi::Zero(voxel.bump_img_.rows(), voxel.bump_img_.cols());
@@ -297,10 +297,10 @@ void BIEVRMap::reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::Ma
   }
 }
 
-void BIEVRMap::integratePoints(const std::vector<Eigen::Vector4d>& points, Voxel& voxel,
+void BIEVRMap::integratePoints(const std::vector<MapPoint>& points, Voxel& voxel,
                                Eigen::MatrixXi& changed) {
   for (const auto& p : points) {
-    Point p_O = voxel.T_C_W_.linear() * p.head(3) + voxel.T_C_W_.translation();
+    Point p_O = voxel.T_C_W_.linear() * p.p_W + voxel.T_C_W_.translation();
 
     int x = static_cast<int>(std::round(p_O(0) * inv_px_size_));
     int y = static_cast<int>(std::round(p_O(1) * inv_px_size_));
@@ -308,7 +308,7 @@ void BIEVRMap::integratePoints(const std::vector<Eigen::Vector4d>& points, Voxel
     double mean_old = voxel.bump_img_(y, x);
     double weight = voxel.bump_weights_(y, x);
     // Limit weighting so points close to the sensor don't get too powerful
-    double weight_new = config_.weighted ? std::min(0.5, 1. / p(3)) : 1.;
+    double weight_new = config_.weighted ? std::min(0.5, 1. / p.range) : 1.;
     voxel.bump_weights_(y, x) += weight_new;
     voxel.bump_img_(y, x) = (mean_old * weight + weight_new * p_O(2)) / voxel.bump_weights_(y, x);
     changed(y, x) = 1;

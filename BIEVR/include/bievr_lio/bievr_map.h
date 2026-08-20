@@ -11,6 +11,19 @@
 
 namespace bievr {
 
+// A raw map point carrying geometry, range and (for COIN-BIEVR) the per-point
+// filtered intensity. Stored in a voxel's pending buffer while it has no stable
+// normal, so that when the voxel first becomes observed the intensity texture
+// of earlier frames is not lost. The intensity field is a no-op for the
+// original BIEVR geometry pipeline (range weighting still uses `range`).
+struct MapPoint {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+  Eigen::Vector3d p_W;
+  double range = 1.0;
+  float intensity = 0.0f;
+};
+
 struct Voxel {
   bool observed_{false};  // We consider a voxel observed if we have seen enough points inside it
   Transform T_C_W_ = Transform::Identity();
@@ -24,7 +37,7 @@ struct Voxel {
   double mean_img_dist_{0.0};
   // Raw points accumulated while the voxel is not yet observed (no normal yet, so they cannot be
   // projected into a bump image). Cleared once the voxel becomes observed.
-  std::vector<Eigen::Vector4d> pending_points_;
+  std::vector<MapPoint> pending_points_;
 };
 
 class BIEVRMap {
@@ -67,14 +80,13 @@ class BIEVRMap {
   // Voxel update / bump-image pipeline, in the order integratePoints invokes them.
   bool updateNormal(Voxel& voxel);
 
-  bool updateBumpImage(const std::vector<Eigen::Vector4d>& points, Voxel& voxel,
-                       bool normal_change);
+  bool updateBumpImage(const std::vector<MapPoint>& points, Voxel& voxel, bool normal_change);
 
   ImageBounds computeImageSize(const Voxel& voxel, const Point& reference_point) const;
 
   void reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::MatrixXi& changed);
 
-  void integratePoints(const std::vector<Eigen::Vector4d>& points, Voxel& voxel,
+  void integratePoints(const std::vector<MapPoint>& points, Voxel& voxel,
                        Eigen::MatrixXi& changed);
 
   void dilateMask(const Eigen::MatrixXi& changed, const Eigen::MatrixXf& weights,
