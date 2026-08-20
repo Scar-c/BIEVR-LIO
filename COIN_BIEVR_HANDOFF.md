@@ -9,7 +9,7 @@
 | Upstream repo | https://github.com/ethz-asl/BIEVR-LIO.git |
 | Baseline SHA | `21121698f273d6fbfffca57546b940edb1de2ff0` (`main`, "Merge pull request #5 from ethz-asl/feature/humble-ci") |
 | Branch | `coin_bievr` |
-| Implementation HEAD before documentation commit | `fa207c7` (round-7; round-6 impl head was `d8ce276`) |
+| Implementation HEAD before documentation commit | `2d316d2` (round-8; round-7 impl head was `fa207c7`) |
 | Backup branch | `coin_bievr_backup_before_rebase` @ `80c3a9f` (pre-reorganization full-state WIP commit, keeps the entire implementation in one place) |
 | Rebased from | clean `main` at baseline SHA |
 
@@ -22,9 +22,11 @@
 > preprocessing validation. Round 5 (commits 26-30) adds photometric safety
 > validation which FAILED the real-map Jacobian FD gate. Round 6 (commits 31-34)
 > fixes the photometric derivative (exact masked-bilinear gradient) and validates
-> it with the three-level FD (Level A/B PASS). Round 7 (commits 35-38) fixes the
-> robust-weighting semantics (removes the invalid lambda^2 unscaling) and runs the
-> first trustworthy C0-vs-C-lambda safety validation; see Section 7g below.
+> it with the three-level FD. Round 7 (commits 35-38) fixes the robust-weighting
+> semantics (removes the invalid lambda^2 unscaling) and runs the first
+> trustworthy C0-vs-C-lambda validation on Shield1. Round 8 (commits 39-40) adds
+> FlatSurfacesS photometric-degeneracy diagnostics + tooling; the FlatSurfacesS
+> dataset itself is NOT available locally (see Section 7h).
 
 ## 2. Commit Table
 
@@ -95,6 +97,13 @@ Round 7 commits (robust weighting semantics + first C0-vs-C-lambda validation):
 | 35 | `c8ae0f2` | c8ae0f2 | fix(photo): remove invalid lambda-squared unscaling; direct robustified accumulation |
 | 36 | `e4abac4` | e4abac4 | test(photo): cover Huber-aware photometric scale semantics |
 | 37 | `fa207c7` | fa207c7 | tools: analyze round-7 photometric scale safety |
+
+Round 8 commits (FlatSurfacesS diagnostics + tooling):
+
+| # | Commit | SHA | Subject |
+|---|---|---|---|
+| 39 | `42005b4` | 42005b4 | feat(debug): expose FlatSurfaces photometric-degeneracy diagnostics |
+| 40 | `2d316d2` | 2d316d2 | tools: add FlatSurfaces round-8 runner and analysis |
 
 ## 7b. Second Review Round (round-2 fixes)
 
@@ -316,6 +325,30 @@ mean 0.40 deg); translation diff ~0.46 m (0.001) / ~1.19 m (0.003) mean, largely
 a lever-arm effect of the small rotation offset over ~140 m (both paths stable,
 < 1.2x C0). Both 0.001 and 0.003 are classified SAFE on Shield1. This is the
 first trustworthy C0-vs-C-lambda data with correct derivative + robust semantics.
+
+## 7h. Round 8 (FlatSurfacesS photometric-effectiveness validation)
+
+**BLOCKED: the FlatSurfacesS dataset is not available locally.** The GEODE bag
+directory (/home/lc/algorithm_versa/bag/GEODE/) contains only
+Shield_tunnel1/4/5 and Tunneling_tunnel1/2 gamma bags; no Flat_Surfaces_Smooth
+bag, no FlatSurfacesS GT, and no GEODE official rmse.py. evo v1.31.1 (evo_ape)
+is available for the APE evaluation once the bag + GT are provided.
+
+Round-8 preparatory work (committed):
+- Per-frame photometric diagnostics now expose near-range (< 1.5 m) photo match
+  statistics (fraction + residual P50/P90 split by range) and the geometry weak
+  eigenvalues lambda1<=lambda2<=lambda3 with the two-weak-direction flag
+  (10*lambda1 > lambda2), for interpreting a future FlatSurfacesS run.
+- scripts/run_flatsurfaces_round8.sh runs the four fixed groups (B0 true-BIEVR,
+  C0 photo OFF, L1=0.001, L2=0.003) on the FULL bag from t0, with explicit
+  guards (no mid-sequence crop, no lambda sweep, no preprocessing tuning).
+- scripts/analyze_flatsurfaces_round8.py aggregates coverage / stability /
+  divergence onset and (with GT + evo_ape) APE using evo_ape tum with the GEODE
+  semantics.
+
+The four-group experiment and the photometric-effectiveness classification are
+deferred until the FlatSurfacesS (Flat_Surfaces_Smooth, Avia/gamma) bag and its
+GT are provided.
 
 ## 3. Per-commit Changed Files
 
