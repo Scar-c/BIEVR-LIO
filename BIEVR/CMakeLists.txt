@@ -115,16 +115,25 @@ install(FILES
 )
 
 # ---------------------------------------------------------------------------
-# Unit tests (COIN-BIEVR reproduction plan Sections 43-48)
+# Unit tests (COIN-BIEVR reproduction plan Sections 43-48 + later rounds)
 # ---------------------------------------------------------------------------
 option(BIEVR_BUILD_TESTS "Build BIEVR unit tests" OFF)
 if(BIEVR_BUILD_TESTS)
   enable_testing()
+  # yaml-cpp is only needed by the config smoke test (config_loader.h is a
+  # header-only consumer of it); it is not a dependency of the library.
+  find_package(yaml-cpp QUIET)
   file(GLOB BIEVR_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/*.cpp)
   foreach(src ${BIEVR_TEST_SOURCES})
     get_filename_component(test_name ${src} NAME_WE)
     add_executable(${test_name} ${src})
     target_link_libraries(${test_name} PRIVATE ${PROJECT_NAME}::${PROJECT_NAME})
+    if(test_name STREQUAL "test_config_smoke" AND TARGET yaml-cpp)
+      target_link_libraries(${test_name} PRIVATE yaml-cpp)
+      # Path to the repo-level config/ directory for the smoke test.
+      target_compile_definitions(${test_name} PRIVATE
+        BIEVR_CONFIG_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config")
+    endif()
     set_target_properties(${test_name} PROPERTIES
       CXX_STANDARD 20
       CXX_STANDARD_REQUIRED ON
