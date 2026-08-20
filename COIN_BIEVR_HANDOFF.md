@@ -9,15 +9,17 @@
 | Upstream repo | https://github.com/ethz-asl/BIEVR-LIO.git |
 | Baseline SHA | `21121698f273d6fbfffca57546b940edb1de2ff0` (`main`, "Merge pull request #5 from ethz-asl/feature/humble-ci") |
 | Branch | `coin_bievr` |
-| Implementation HEAD before documentation commit | `7ebd41d` (round-3; previous round-2 impl head was `ef42b03`) |
+| Implementation HEAD before documentation commit | `7b5c8ff` (round-4; round-3 impl head was `7ebd41d`) |
 | Backup branch | `coin_bievr_backup_before_rebase` @ `80c3a9f` (pre-reorganization full-state WIP commit, keeps the entire implementation in one place) |
 | Rebased from | clean `main` at baseline SHA |
 
 > Round 1 (commits 1-11, reviewed HEAD `5e93707`) covers the initial COIN-BIEVR
 > implementation. Round 2 (commits 12-16) contains the second-review correctness
-> fixes. Round 3 (commits 17-20, this document's Implementation HEAD) fixes the
-> bootstrap shared-weight issue, makes the COIN-BIEVR config a complete preset
-> and adds projection boundary diagnostics; see Section 7c below.
+> fixes. Round 3 (commits 17-20) fixes the bootstrap shared-weight issue, makes
+> the COIN-BIEVR config a complete preset and adds projection boundary
+> diagnostics. Round 4 (commits 21-25) fixes a config-loader bug, adds per-frame
+> intensity diagnostics + CSV export and runs the first real-data GEODE/Avia
+> preprocessing validation; see Section 7d below.
 
 ## 2. Commit Table
 
@@ -54,6 +56,15 @@ Round 3 commits (bootstrap + config + diagnostics, appended on top):
 | 18 | `8a8c5f0` | 8a8c5f0 | debug(intensity): report projection boundary clamping |
 | 19 | `4c8152c` | 4c8152c | fix(config): make COIN-BIEVR preset a complete algorithm config |
 | 20 | `7ebd41d` | 7ebd41d | test(intensity): bootstrap shared-weight + config smoke |
+
+Round 4 commits (config-loader fix + diagnostics + tools, appended on top):
+
+| # | Commit | SHA | Subject |
+|---|---|---|---|
+| 21 | `4b0fdc0` | 4b0fdc0 | config: add experimental Livox Avia COIN-BIEVR preset |
+| 22 | `8a0042d` | 8a0042d | fix(config): nested YAML resolution no longer mutates the document |
+| 23 | `e589c81` | e589c81 | feat(debug): per-frame intensity preprocessing diagnostics + CSV export |
+| 24 | `7b5c8ff` | 7b5c8ff | tools: round-4 intensity preprocessing analysis + window-sweep scripts |
 
 ## 7b. Second Review Round (round-2 fixes)
 
@@ -121,6 +132,44 @@ sensor configs stay in `config/sensor_configs/`. Correct ROS1 usage:
 
 **Tests.** Extended from 12 to 14 (`test_bootstrap_shared_weight`,
 `test_config_smoke`).
+
+## 7d. Round 4 (config-loader fix + diagnostics + real-data Avia validation)
+
+**Bug found & fixed: `getNested` corrupted the YAML document (commit 22).**
+`MergedYaml::getNested()` used yaml-cpp's non-const `operator[]` while walking
+the dotted key; because `YAML::Node` is a ref-counted handle into the shared
+document tree, the traversal could mutate nodes, so after a `getNested()` call
+subsequent `as<T>()` lookups of the same keys failed and nested
+`intensity.preprocessing` values (vertical_fov_deg, brightness window, ...)
+silently fell back to C++ defaults (FOV stayed 50 deg, window 0x0 no matter the
+YAML). Fixed with const-only traversal; regression covered in
+`test_config_smoke` (Avia preset must load 77.2 / 41x7).
+
+**Per-frame intensity diagnostics (commit 23).** `IntensityProcessingResult`
+now carries filtered P1/P5/P50/P95/P99 + std + saturation@0/@255 + 256-bin
+histogram, raw min/max/P50/P95/P99 and elevation min/max/P1/P99, all computed
+with lightweight O(N) histograms. A CSV logger (gated by
+`debug.intensity_diagnostics_path`, off by default) exports per-frame
+`diagnostics.csv` and `diagnostics_histogram.csv`.
+
+**Real-data GEODE/Avia validation (Shield 1, Livox Avia).** See
+`results/intensity_preprocess/avia_shield1/` (gitignored). Short segment
+starting at bag begin (vehicle stationary -> IMU bias init valid):
+- vertical_fov_deg 77.2 matches the observed elevation [-38.5, 38.5] deg
+  (P1/P99 [-34.3, 34.4]); mean vertical-clamp ratio ~0.06% (target <1%).
+- collision ratio ~62% (expected for the irregular Avia pattern; no raw
+  intensity leakage - covered by unit tests).
+- Brightness-window sweep (0x0 / 41x7 / 81x15 / 161x31) shifts the filtered
+  distribution (P50 193.5 / 149.5 / 129.5 / 137.5) with no 255-saturation.
+- Geometry-only A/B (params vs params_coin_bievr_avia, photo OFF): trajectories
+  agree to ~cm level (mean 54 mm / 0.19 deg over 139 m), with the expected
+  1-frame timestamp offset from the round-3 NeedMap bootstrap; baseline is
+  stable (no divergence) when the segment starts with a stationary period.
+
+**Important validation caveat.** A segment that starts mid-motion breaks the
+zero-velocity IMU bias init and makes BOTH baseline and COIN-BIEVR diverge -
+this is a data/init issue, not a code regression. Baseline on a properly
+initialized segment is stable on Shield 1.
 
 ## 3. Per-commit Changed Files
 
