@@ -22,7 +22,158 @@ struct RegistrationConfig {
   bool lm_debug_print = false;
   bool img_residual = true;
   bool img_jacobian = true;
+  // COIN-BIEVR photometric residual: master switch and the scaling constant
+  // lambda that balances meter-scale geometry residuals against the 0..255
+  // intensity residuals. The COIN-BIEVR supplement does not specify the exact
+  // value (Section 55 of the reproduction plan).
+  bool photometric_residual = false;
+  double photometric_scale = 1.0;
 };
+
+// Bilinear sample of `image` at subpixel (x, y). `weights` acts as the
+// validity mask; corners with weight <= 0 are ignored (re-normalized). Returns
+// false if the 2x2 stencil is out of bounds or has no valid corners.
+inline bool sampleImageValue(const Eigen::MatrixXf& image, const Eigen::MatrixXf& weights,
+                             const double x, const double y, double& value) {
+  const int x0 = std::floor(x);
+  const int y0 = std::floor(y);
+
+  const int x1 = x0 + 1;
+  const int y1 = y0 + 1;
+
+  const int max_x = image.cols() - 1;
+  const int max_y = image.rows() - 1;
+  if (x0 < 0 || y0 < 0 || x1 > max_x || y1 > max_y) return false;
+
+  const double dx = x - x0;
+  const double dy = y - y0;
+  const double dx1 = 1.0 - dx;
+  const double dy1 = 1.0 - dy;
+
+  const int v00 = weights(y0, x0) > 0, v01 = weights(y0, x1) > 0;
+  const int v10 = weights(y1, x0) > 0, v11 = weights(y1, x1) > 0;
+
+  const double w0 = dx1 * dy1 * v00;
+  const double w1 = dx * dy1 * v01;
+  const double w2 = dx1 * dy * v10;
+  const double w3 = dx * dy * v11;
+
+  const double wsum = w0 + w1 + w2 + w3;
+  if (wsum == 0.0) return false;
+
+  value = (w0 * image(y0, x0) + w1 * image(y0, x1) + w2 * image(y1, x0) + w3 * image(y1, x1)) /
+          wsum;
+  return true;
+}
+
+// Combined bilinear sample + central-difference gradient, generic over the
+// image channel. Shares floor/bounds/fraction work and reuses the 4 inner
+// corner reads. Returns false if the center 2x2 stencil is out of bounds or
+// has no valid corners. Gradients are set to 0 when their 4x2 stencil is out of
+// bounds or has no valid corners.
+inline bool sampleImageValueAndGradient(const Eigen::MatrixXf& image,
+                                        const Eigen::MatrixXf& weights, const double x,
+                                        const double y, double& value, double& dIdx,
+                                        double& dIdy) {
+  const int x0 = std::floor(x);
+  const int y0 = std::floor(y);
+  const int x1 = x0 + 1;
+  const int y1 = y0 + 1;
+
+  const int max_x = image.cols() - 1;
+  const int max_y = image.rows() - 1;
+  if (x0 < 0 || y0 < 0 || x1 > max_x || y1 > max_y) return false;
+
+  const auto& M = image;
+  const auto& V = weights;
+
+  const double dx = x - x0;
+  const double dy = y - y0;
+  const double dx1 = 1.0 - dx;
+  const double dy1 = 1.0 - dy;
+
+  const int v00 = V(y0, x0) > 0, v01 = V(y0, x1) > 0;
+  const int v10 = V(y1, x0) > 0, v11 = V(y1, x1) > 0;
+  {
+    const double w0 = dx1 * dy1 * v00;
+    const double w1 = dx * dy1 * v01;
+    const double w2 = dx1 * dy * v10;
+    const double w3 = dx * dy * v11;
+    const double ws = w0 + w1 + w2 + w3;
+    if (ws == 0.0) return false;
+    value = (w0 * M(y0, x0) + w1 * M(y0, x1) + w2 * M(y1, x0) + w3 * M(y1, x1)) / ws;
+  }
+
+  dIdx = 0.0;
+  dIdy = 0.0;
+
+  if (x0 >= 1 && x1 + 1 <= max_x) {
+    const int xm = x0 - 1;
+    const int xp = x1 + 1;
+
+    const int am0 = V(y0, xm) > 0, am2 = V(y1, xm) > 0;
+    const double wm0 = dx1 * dy1 * am0;
+    const double wm1 = dx * dy1 * v00;
+    const double wm2 = dx1 * dy * am2;
+    const double wm3 = dx * dy * v10;
+    const double wms = wm0 + wm1 + wm2 + wm3;
+
+    const int ap1 = V(y0, xp) > 0, ap3 = V(y1, xp) > 0;
+    const double wp0 = dx1 * dy1 * v01;
+    const double wp1 = dx * dy1 * ap1;
+    const double wp2 = dx1 * dy * v11;
+    const double wp3 = dx * dy * ap3;
+    const double wps = wp0 + wp1 + wp2 + wp3;
+
+    if (wms > 0.0 && wps > 0.0) {
+      const double vm =
+          (wm0 * M(y0, xm) + wm1 * M(y0, x0) + wm2 * M(y1, xm) + wm3 * M(y1, x0)) / wms;
+      const double vp =
+          (wp0 * M(y0, x1) + wp1 * M(y0, xp) + wp2 * M(y1, x1) + wp3 * M(y1, xp)) / wps;
+      dIdx = 0.5 * (vp - vm);
+    }
+  }
+
+  if (y0 >= 1 && y1 + 1 <= max_y) {
+    const int ym = y0 - 1;
+    const int yp = y1 + 1;
+
+    const int am0 = V(ym, x0) > 0, am1 = V(ym, x1) > 0;
+    const double wm0 = dx1 * dy1 * am0;
+    const double wm1 = dx * dy1 * am1;
+    const double wm2 = dx1 * dy * v00;
+    const double wm3 = dx * dy * v01;
+    const double wms = wm0 + wm1 + wm2 + wm3;
+
+    const int ap2 = V(yp, x0) > 0, ap3 = V(yp, x1) > 0;
+    const double wp0 = dx1 * dy1 * v10;
+    const double wp1 = dx * dy1 * v11;
+    const double wp2 = dx1 * dy * ap2;
+    const double wp3 = dx * dy * ap3;
+    const double wps = wp0 + wp1 + wp2 + wp3;
+
+    if (wms > 0.0 && wps > 0.0) {
+      const double vm =
+          (wm0 * M(ym, x0) + wm1 * M(ym, x1) + wm2 * M(y0, x0) + wm3 * M(y0, x1)) / wms;
+      const double vp =
+          (wp0 * M(y1, x0) + wp1 * M(y1, x1) + wp2 * M(yp, x0) + wp3 * M(yp, x1)) / wps;
+      dIdy = 0.5 * (vp - vm);
+    }
+  }
+
+  return true;
+}
+
+inline bool getSubPixelIntensityValue(const Voxel* voxel, const double x, const double y,
+                                      double& value) {
+  return sampleImageValue(voxel->intensity_img_, voxel->bump_weights_, x, y, value);
+}
+
+inline bool sampleIntensityValueAndGradient(const Voxel* voxel, const double x, const double y,
+                                            double& value, double& dIdx, double& dIdy) {
+  return sampleImageValueAndGradient(voxel->intensity_img_, voxel->bump_weights_, x, y, value,
+                                     dIdx, dIdy);
+}
 
 inline bool getSubPixelValue(const Voxel* voxel, const double x, const double y, double& value) {
   int x0 = std::floor(x);
