@@ -5,12 +5,25 @@
 
 #include "bievr_lio/bievr_map.h"
 #include "bievr_lio/imu_integrator.h"
+#include "bievr_lio/intensity_processor.h"
+#include "bievr_lio/intensity_sampling.h"
 #include "bievr_lio/log++.h"
 #include "bievr_lio/ls_optimizer.h"
 #include "bievr_lio/preprocess.h"
 #include "bievr_lio/utils.h"
 
 namespace bievr {
+
+// COIN-BIEVR intensity configuration (Section 39-40 of the reproduction plan).
+struct IntensityConfig {
+  bool enabled = true;  // master switch; false = original BIEVR behaviour
+
+  IntensityProcessorConfig preprocessing;
+  IntensitySamplingConfig sampling;
+  bool optimization_enabled = true;
+  // Photometric scale lambda. The COIN-BIEVR supplement does not give a value.
+  double photometric_scale = 0.02;
+};
 
 class Pipeline {
  public:
@@ -20,6 +33,7 @@ class Pipeline {
     ImuConfig imu;
     RegistrationConfig registration;
     BIEVRMap::Config map;
+    IntensityConfig intensity;  // COIN-BIEVR
     bool print_timing = false;
     bool publish_all_clouds = false;
     bool print_debug = false;      // when true, lower the log level to show DEBUG messages
@@ -63,9 +77,12 @@ class Pipeline {
   bool initializeBias(const std::vector<ImuMeasurement>& imu_data, const Pointcloud& pointcloud);
   void tryInitMap(uint64_t stamp, const State& x_j_pred, const Transform& T_W_I_init,
                   const Pointcloud& undistorted, const IntensityView& intensities,
-                  std::vector<double>& ranges, const Header& header);
+                  const Intensities& filtered_intensities, std::vector<double>& ranges,
+                  const Header& header);
   void sampleSource(const Pointcloud& undistorted, const Transform& T_W_I_init,
                     Pointcloud& filtered, Pointcloud& coarse, Pointcloud& fine) const;
+  void publishIntensityDebug(const Header& header, const Transform& T_W_I,
+                             const IntensitySampleSet& samples, const IntensityPointcloud* map_cloud);
 
   // State and optimization management
   bool addState(const uint64_t time, const Quaternion& quat, const V3& p, const V3& v);
@@ -105,6 +122,7 @@ class Pipeline {
   Phase phase_ = Phase::NeedBias;
   std::unique_ptr<BiasInitializer> bias_initializer_;
   std::shared_ptr<BIEVRMap> map_;
+  IntensityProcessor intensity_processor_;  // COIN-BIEVR per-frame normalization
   V3 acc_bias_ = V3::Zero();
   V3 gyro_bias_ = V3::Zero();
   V3 gravity_dir_ = V3(0, 0, 1);

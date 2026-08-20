@@ -76,6 +76,25 @@ struct DashboardState {
 // to show a banner (e.g. "WAITING FOR DATA") before any frame is processed.
 void printDashboardBanner(const std::string& ascii, const std::string& message);
 
+// Per-frame COIN-BIEVR statistics for the dashboard (Section 42 of the
+// reproduction plan). Filled by the pipeline and rendered by printDashboard.
+struct FrameStats {
+  int geometry_points = 0;
+  int intensity_points = 0;
+  int observed_voxels = 0;
+  int intensity_voxels = 0;
+  int geo_residuals = 0;
+  int photo_residuals = 0;
+  double geo_rmse = 0.0;
+  double photo_rmse = 0.0;
+  double weak_lambda1 = 0.0;
+  double weak_lambda2 = 0.0;
+  double weak_lambda3 = 0.0;
+  double intensity_preprocess_ms = 0.0;
+  double intensity_sampling_ms = 0.0;
+  int intensity_map_voxels = 0;
+};
+
 // Prints the COIN-LIO style live status dashboard (position, orientation,
 // velocity, trajectory length, biases, effective points, computation time).
 // `stamp_ns` is the sensor time of the current frame; `velocity` is in the world
@@ -83,7 +102,7 @@ void printDashboardBanner(const std::string& ascii, const std::string& message);
 // seconds. `state` accumulates the trajectory length / elapsed-time reference.
 void printDashboard(DashboardState& state, uint64_t stamp_ns, const Transform& T_W_I,
                     const V3& velocity, const V3& acc_bias, const V3& gyro_bias, double comp_mean_s,
-                    double comp_max_s, int n_effective_points);
+                    double comp_max_s, int n_effective_points, const FrameStats& stats);
 
 }  // namespace bievr
 

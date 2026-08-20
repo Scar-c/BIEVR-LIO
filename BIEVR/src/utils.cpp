@@ -48,7 +48,7 @@ void printDashboardBanner(const std::string& ascii, const std::string& message) 
 
 void printDashboard(DashboardState& state, uint64_t stamp_ns, const Transform& T_W_I,
                     const V3& velocity, const V3& acc_bias, const V3& gyro_bias, double comp_mean_s,
-                    double comp_max_s, int n_effective_points) {
+                    double comp_max_s, int n_effective_points, const FrameStats& stats) {
   // Accumulate the travelled distance from the previous reported position.
   const V3 position = T_W_I.translation();
   if (state.has_last_position) {
@@ -101,6 +101,21 @@ void printDashboard(DashboardState& state, uint64_t stamp_ns, const Transform& T
   out << row("Computation Time     [ms] : Avg: " + dashMs(comp_mean_s) +
              " Max: " + dashMs(comp_max_s))
       << "\n";
+  out << rule << "\n";
+  out << row("Geometry Points       [#] : " + std::to_string(stats.geometry_points)) << "\n";
+  out << row("Intensity Points       [#] : " + std::to_string(stats.intensity_points)) << "\n";
+  out << row("Observed Voxels        [#] : " + std::to_string(stats.observed_voxels)) << "\n";
+  out << row("Intensity Voxels       [#] : " + std::to_string(stats.intensity_voxels)) << "\n";
+  out << row("Geo Residuals          [#] : " + std::to_string(stats.geo_residuals)) << "\n";
+  out << row("Photo Residuals        [#] : " + std::to_string(stats.photo_residuals)) << "\n";
+  out << row("Geo RMSE                [m] : " + dashFmt(stats.geo_rmse)) << "\n";
+  out << row("Photo RMSE              [-] : " + dashFmt(stats.photo_rmse)) << "\n";
+  out << row("Weak lambda1/2/3           : " + dashFmt(stats.weak_lambda1) + " " +
+             dashFmt(stats.weak_lambda2) + " " + dashFmt(stats.weak_lambda3))
+      << "\n";
+  out << row("Intensity Preproc     [ms] : " + dashMs(stats.intensity_preprocess_ms)) << "\n";
+  out << row("Intensity Sampling    [ms] : " + dashMs(stats.intensity_sampling_ms)) << "\n";
+  out << row("Intensity Map Voxels  [#] : " + std::to_string(stats.intensity_map_voxels)) << "\n";
   out << rule;
 
   std::cout << out.str() << std::endl;

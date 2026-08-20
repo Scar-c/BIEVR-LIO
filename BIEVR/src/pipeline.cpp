@@ -11,8 +11,61 @@
 
 namespace bievr {
 
+namespace {
+
+// Builds a non-owning view onto an owning Intensities row so it can be passed
+// where an IntensityView is expected (e.g. IntensityPointcloud construction).
+inline IntensityView toIntensityView(const Intensities& intensities) {
+  return IntensityView(intensities.data(), intensities.cols(),
+                       Eigen::InnerStride<>(intensities.outerStride()));
+}
+
+// Reconstructs the voxel-wise intensity map as a 3D point cloud (COIN-BIEVR
+// Fig. 1 / Fig. 4 style): each valid pixel is lifted to (u*px, v*px, height)
+// in the voxel-local frame and transformed to world, carrying the intensity.
+// Capped at `max_voxels` so debug publishing never stalls the pipeline.
+IntensityPointcloud buildIntensityMapCloud(const BIEVRMap& map, size_t max_voxels) {
+  Pointcloud points;
+  Intensities intensities;
+  size_t voxels_used = 0;
+  map.forEachVoxel([&](size_t /*hash*/, const Voxel& voxel) {
+    if (voxels_used >= max_voxels) return;
+    const int rows = voxel.bump_img_.rows();
+    const int cols = voxel.bump_img_.cols();
+    if (rows == 0 || cols == 0) return;
+    ++voxels_used;
+
+    size_t start = points.size();
+    size_t n_valid = 0;
+    for (int y = 0; y < rows; ++y) {
+      for (int x = 0; x < cols; ++x) {
+        if (voxel.bump_weights_(y, x) <= 0.f) continue;
+        ++n_valid;
+      }
+    }
+    points.resize(start + n_valid);
+    intensities.resize(1, start + n_valid);
+
+    const double px = map.pixel_size;
+    size_t k = start;
+    for (int y = 0; y < rows; ++y) {
+      for (int x = 0; x < cols; ++x) {
+        if (voxel.bump_weights_(y, x) <= 0.f) continue;
+        points[k] = voxel.T_C_W_.inverse() *
+                    Point(x * px, y * px, voxel.bump_img_(y, x));
+        intensities(0, k) = voxel.intensity_img_(y, x);
+        ++k;
+      }
+    }
+  });
+  return IntensityPointcloud(points, toIntensityView(intensities));
+}
+
+}  // namespace
+
 Pipeline::Pipeline(const Config& config) : config_(config) {
   map_ = std::make_shared<BIEVRMap>(config_.map);
+  intensity_processor_.configure(config_.intensity.preprocessing);
 
   if (!config_.log_path.empty()) {
     LOG(I, "Logging to " << config_.log_path);
@@ -74,6 +127,18 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   const Pointcloud points_filtered_I = transformPoints(config_.T_I_L, points_filtered_L);
   filter_timer.Stop();
 
+  // COIN-BIEVR: per-frame intensity normalization in the LiDAR frame. The
+  // output is index-aligned with points_filtered_L (hence also with the
+  // transformed / undistorted spatial clouds downstream).
+  const bool intensity_enabled = config_.intensity.enabled;
+  Intensities filtered_intensity;
+  if (intensity_enabled && config_.intensity.preprocessing.enabled) {
+    timing::Timer inten_timer("02a_intensity_preprocess");
+    const Pointcloud points_lidar = filtered_L;
+    filtered_intensity = intensity_processor_.process(points_lidar, intensities);
+    inten_timer.Stop();
+  }
+
   if (phase_ == Phase::NeedBias) {
     // Estimate initial biases and orientation based on zero velocity assumption.
     // This also resolves imu_acc_scale_ (normalization detection).
@@ -123,7 +188,7 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   const Transform T_W_I_init(x_j_pred.quat, x_j_pred.p);
   if (phase_ == Phase::NeedMap) {
     tryInitMap(imu_data.back().stamp, x_j_pred, T_W_I_init, points_undistorted_I, intensities,
-               ranges, header);
+               filtered_intensity, ranges, header);
     return;
   }
 
@@ -133,9 +198,26 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   sampleSource(points_undistorted_I, T_W_I_init, source_filtered, source_coarse, source_fine);
   voxel_timer.Stop();
 
-  // Perform the actual registration
+  // COIN-BIEVR: intensity point sampling (top-N intensity voxels along the
+  // geometry-weak direction, downsampled to 0.1 m).
+  IntensitySampleSet intensity_samples;
+  if (intensity_enabled && config_.intensity.sampling.enabled) {
+    timing::Timer isamp_timer("04b_intensity_sampling");
+    intensity_samples =
+        sampleIntensityPoints(*map_, points_undistorted_I, filtered_intensity, T_W_I_init,
+                              config_.intensity.sampling);
+    isamp_timer.Stop();
+  }
+
+  // Perform the actual registration (joint geometry + photometric)
   timing::Timer align_timer("05_registration");
-  LsqRegistration optimizer(*map_, source_filtered, config_.registration);
+  RegistrationConfig reg_config = config_.registration;
+  reg_config.photometric_residual =
+      intensity_enabled && config_.intensity.optimization_enabled &&
+      !intensity_samples.points.empty();
+  reg_config.photometric_scale = config_.intensity.photometric_scale;
+  LsqRegistration optimizer(*map_, source_filtered, intensity_samples.points,
+                            intensity_samples.intensities, reg_config);
   const Transform T_W_I = optimizer.computeTransformation(T_W_I_init);
   const int n_effective_points = optimizer.numEffectivePoints();
   align_timer.Stop();
@@ -143,7 +225,8 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   // Transform the full cloud using the estimated pose and add it to the map
   timing::Timer map_timer("06_map");
   const Pointcloud points_registered = T_W_I * points_undistorted_I;
-  map_->integratePoints(points_registered, &ranges);
+  map_->integratePoints(points_registered, &ranges,
+                        intensity_enabled ? &filtered_intensity : nullptr);
   map_timer.Stop();
 
   // Bookkeeping and optimization of the intertial part of the state
@@ -160,6 +243,16 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   timing::Timer pub_time("08_publish");
   publishFrame(header, T_W_I, points_registered, source_filtered, source_coarse, source_fine,
                points_undistorted_I, intensities);
+  if (config_.publish_all_clouds) {
+    // Debug topics: selected intensity points, weak direction, selected voxels
+    // and the intensity-textured map (capped so debug publishing never stalls).
+    IntensityPointcloud map_cloud;
+    if (intensity_enabled) {
+      map_cloud = buildIntensityMapCloud(*map_, 2000);
+    }
+    publishIntensityDebug(header, T_W_I, intensity_samples,
+                          intensity_enabled ? &map_cloud : nullptr);
+  }
   pub_time.Stop();
 
   step_timer.Stop();
@@ -173,9 +266,28 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   }
 
   if (config_.print_dashboard) {
+    FrameStats stats;
+    stats.geometry_points = static_cast<int>(source_filtered.size());
+    stats.intensity_points = static_cast<int>(intensity_samples.points.size());
+    stats.observed_voxels = static_cast<int>(intensity_samples.observed_voxels);
+    stats.intensity_voxels = static_cast<int>(intensity_samples.selected_voxels);
+    stats.geo_residuals = optimizer.numGeometryEffectivePoints();
+    stats.photo_residuals = optimizer.numPhotometricEffectivePoints();
+    stats.geo_rmse = optimizer.geometryRMSE();
+    stats.photo_rmse = optimizer.photometricRMSE();
+    stats.weak_lambda1 = intensity_samples.weak_eigenvalues.x();
+    stats.weak_lambda2 = intensity_samples.weak_eigenvalues.y();
+    stats.weak_lambda3 = intensity_samples.weak_eigenvalues.z();
+    stats.intensity_preprocess_ms = timing::Timing::GetMeanSeconds("02a_intensity_preprocess") * 1e3;
+    stats.intensity_sampling_ms = timing::Timing::GetMeanSeconds("04b_intensity_sampling") * 1e3;
+    stats.intensity_map_voxels = 0;
+    map_->forEachVoxel([&stats](size_t, const Voxel& v) {
+      if (v.intensity_img_.rows() > 0) ++stats.intensity_map_voxels;
+    });
+
     printDashboard(dashboard_, header.stamp, T_W_I, x_j_pred.v, acc_bias_, gyro_bias_,
                    timing::Timing::GetMeanSeconds("step"), timing::Timing::GetMaxSeconds("step"),
-                   n_effective_points);
+                   n_effective_points, stats);
   }
 }
 
@@ -224,12 +336,16 @@ bool Pipeline::initializeBias(const std::vector<ImuMeasurement>& imu_data,
 
 void Pipeline::tryInitMap(uint64_t stamp, const State& x_j_pred, const Transform& T_W_I_init,
                           const Pointcloud& undistorted, const IntensityView& intensities,
-                          std::vector<double>& ranges, const Header& header) {
+                          const Intensities& filtered_intensities, std::vector<double>& ranges,
+                          const Header& header) {
   if (undistorted.size() < config_.min_points_for_map_init) return;
   const Pointcloud registered = T_W_I_init * undistorted;
-  map_->integratePoints(registered, &ranges);
+  map_->integratePoints(registered, &ranges,
+                        config_.intensity.enabled ? &filtered_intensities : nullptr);
   addState(stamp, x_j_pred.quat, x_j_pred.p, x_j_pred.v);
   publishLatestState(header);
+  // The registered cloud keeps the raw intensity row (index-aligned with the
+  // points); filtered intensity is only used for the map.
   publish(IntensityPointcloud(registered, intensities), header, "points/registered");
   if (map_->size() > config_.map_size_running_threshold) {
     phase_ = Phase::Running;
@@ -246,6 +362,44 @@ void Pipeline::sampleSource(const Pointcloud& undistorted, const Transform& T_W_
     filtered = fine + coarse;
   } else {
     filtered = source_down;
+  }
+}
+
+void Pipeline::publishIntensityDebug(const Header& header, const Transform& T_W_I,
+                                     const IntensitySampleSet& samples,
+                                     const IntensityPointcloud* map_cloud) {
+  if (!samples.points.empty()) {
+    publish(IntensityPointcloud(T_W_I * samples.points, toIntensityView(samples.intensities)),
+            header, "debug/intensity/selected_points");
+  }
+  publish(samples.weak_direction, header, "debug/degeneracy/direction");
+
+  if (!samples.selected_voxel_hashes.empty() && map_) {
+    std::vector<Eigen::Vector3d> centroid_list;
+    std::vector<double> value_list;
+    centroid_list.reserve(samples.selected_voxel_hashes.size());
+    value_list.reserve(samples.selected_voxel_hashes.size());
+    for (const size_t hash : samples.selected_voxel_hashes) {
+      const Voxel* v = map_->getVoxel(hash);
+      if (!v || v->num_points_ == 0) continue;
+      centroid_list.push_back(v->sum_ / static_cast<double>(v->num_points_));
+      value_list.push_back(v->intensity_information_.norm());
+    }
+    if (!centroid_list.empty()) {
+      Pointcloud centroids;
+      centroids.resize(centroid_list.size());
+      Intensities vals(1, value_list.size());
+      for (size_t i = 0; i < centroid_list.size(); ++i) {
+        centroids[i] = centroid_list[i];
+        vals(0, i) = value_list[i];
+      }
+      publish(IntensityPointcloud(centroids, toIntensityView(vals)), header,
+              "debug/intensity/selected_voxels");
+    }
+  }
+
+  if (map_cloud) {
+    publish(*map_cloud, header, "debug/map/intensity");
   }
 }
 
