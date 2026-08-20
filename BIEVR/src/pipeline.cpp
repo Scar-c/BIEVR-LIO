@@ -64,7 +64,11 @@ IntensityPointcloud buildIntensityMapCloud(const BIEVRMap& map, size_t max_voxel
 }  // namespace
 
 Pipeline::Pipeline(const Config& config) : config_(config) {
-  map_ = std::make_shared<BIEVRMap>(config_.map);
+  // The map's photometric channel is enabled only when the master switch is on,
+  // so that intensity.enabled=false runs the original BIEVR map path.
+  BIEVRMap::Config map_config = config_.map;
+  map_config.intensity_enabled = config_.intensity.enabled;
+  map_ = std::make_shared<BIEVRMap>(map_config);
   intensity_processor_.configure(config_.intensity.preprocessing);
 
   if (!config_.log_path.empty()) {
@@ -221,8 +225,13 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
       intensity_enabled && config_.intensity.optimization_enabled &&
       !intensity_samples.points.empty();
   reg_config.photometric_scale = config_.intensity.photometric_scale;
-  LsqRegistration optimizer(*map_, source_filtered, intensity_samples.points,
-                            intensity_samples.intensities, reg_config);
+  // With the master switch off we use the geometry-only constructor so the
+  // photometric source is never constructed / accumulated.
+  LsqRegistration optimizer =
+      intensity_enabled
+          ? LsqRegistration(*map_, source_filtered, intensity_samples.points,
+                            intensity_samples.intensities, reg_config)
+          : LsqRegistration(*map_, source_filtered, reg_config);
   const Transform T_W_I = optimizer.computeTransformation(T_W_I_init);
   const int n_effective_points = optimizer.numEffectivePoints();
   align_timer.Stop();

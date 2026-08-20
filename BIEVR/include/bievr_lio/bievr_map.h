@@ -59,6 +59,9 @@ class BIEVRMap {
     bool weighted = false;      // use range weighted update for bump image
     bool smooth = false;        // apply gaussian smoothing to bump image
     double norm_tol_deg{3.0};   // if normal changes more than this, reproject bump image
+    // COIN-BIEVR photometric channel. When false the map never allocates or
+    // updates the voxel intensity image (original BIEVR memory/CPU path).
+    bool intensity_enabled = false;
   };
 
   explicit BIEVRMap(Config config);

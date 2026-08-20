@@ -2,6 +2,7 @@
 
 #include <Eigen/Eigenvalues>
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -50,9 +51,22 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
 
   LOG(D, "Integrating " << cloud.size() << " points to the map.");
 
-  const bool update_intensity = (intensities != nullptr);
+  // Defensive check: a supplied intensity row must be index-aligned with the
+  // cloud. A mismatch is a hard programming error: we must NEVER fall back to
+  // treating intensity as 0 and merging it into the map as a valid observation
+  // (that would silently corrupt the intensity map / shared weights).
+  const bool intensity_supplied = (intensities != nullptr);
   const bool intensities_aligned =
-      update_intensity && static_cast<size_t>(intensities->cols()) == cloud.size();
+      intensity_supplied && static_cast<Eigen::Index>(intensities->cols()) == cloud.size();
+  if (intensity_supplied && !intensities_aligned) {
+    LOG(W, "BIEVRMap::integratePoints: intensity size " << intensities->cols()
+                                                        << " != cloud size " << cloud.size()
+                                                        << ". Skipping intensity update.");
+    assert(intensities_aligned && "BIEVRMap::integratePoints intensity/cloud size mismatch");
+  }
+  // Intensity work requires the photometric channel to be enabled for the map,
+  // an aligned intensity row, and a non-empty cloud.
+  const bool update_intensity = config_.intensity_enabled && intensities_aligned;
 
   // Each entry is {voxel hash, map point (xyz + range + filtered intensity)}.
   std::vector<std::pair<size_t, MapPoint>> hashed_points(cloud.size());
@@ -67,8 +81,10 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
                         } else {
                           hashed_points[i].second.range = 1;
                         }
+                        // Only meaningful when the intensity update is enabled;
+                        // otherwise the field is never read.
                         hashed_points[i].second.intensity =
-                            (intensities_aligned) ? static_cast<float>((*intensities)(0, i)) : 0.0f;
+                            (update_intensity) ? static_cast<float>((*intensities)(0, i)) : 0.0f;
                         hashed_points[i].first = hashIndex(hashed_points[i].second.p_W);
                       }
                     });
@@ -140,7 +156,9 @@ bool BIEVRMap::integratePoints(const Pointcloud& cloud, const std::vector<double
           }
 
           updateBumpImage(voxel_points, iter->second.voxel, normal_change, update_intensity);
-          computeIntensityInformation(iter->second.voxel);
+          if (config_.intensity_enabled) {
+            computeIntensityInformation(iter->second.voxel);
+          }
         }
       });
 
@@ -267,20 +285,23 @@ BIEVRMap::ImageBounds BIEVRMap::computeImageSize(const Voxel& voxel,
 
 void BIEVRMap::reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::MatrixXi& changed) {
   Eigen::MatrixXf bump_original = voxel.bump_img_;
-  Eigen::MatrixXf intensity_original = voxel.intensity_img_;
   Eigen::MatrixXf weights_original = voxel.bump_weights_;
+  // The intensity map shares the height map's resolution and lifecycle, but only
+  // when the photometric channel is enabled for the map; otherwise the voxel
+  // never allocates an intensity raster (original BIEVR path).
+  const bool with_intensity = config_.intensity_enabled;
+  Eigen::MatrixXf intensity_original;
+  if (with_intensity) intensity_original = voxel.intensity_img_;
   Transform T_W_C_o = voxel.T_C_W_.inverse();
   voxel.bump_img_.resize(bounds.height, bounds.width);
   voxel.bump_smoothed_.resize(bounds.height, bounds.width);
   voxel.bump_weights_.resize(bounds.height, bounds.width);
-  // The intensity map shares the height map's resolution and lifecycle
-  // (Section 16 of the reproduction plan).
-  voxel.intensity_img_.resize(bounds.height, bounds.width);
+  if (with_intensity) voxel.intensity_img_.resize(bounds.height, bounds.width);
   changed.resize(bounds.height, bounds.width);
   voxel.bump_img_.setZero();
   voxel.bump_smoothed_.setZero();
   voxel.bump_weights_.setZero();
-  voxel.intensity_img_.setZero();
+  if (with_intensity) voxel.intensity_img_.setZero();
   changed.setZero();
   Point p_o_planar(bounds.u_min, bounds.v_min, 0.0);
   Point p_w_o = voxel.T_O_W_.inverse() * p_o_planar;
@@ -296,6 +317,11 @@ void BIEVRMap::reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::Ma
       // Lift the point to 3D using the original bump value, then transform it into the new camera
       // frame and project it. The intensity is a surface texture: it rides along
       // with the (u,v,height) surface pixel and is never used for the 3D lift.
+      //
+      // COIN-BIEVR supplement does not explicitly describe intensity-map
+      // reprojection when the BIEVR plane frame changes. This implementation
+      // reprojects intensity together with the underlying height surface to
+      // preserve co-registration (engineering reproduction detail).
       Point p_O = T_C1_C0 * Point(j * config_.px_size, i * config_.px_size, bump_original(i, j));
       int x = static_cast<int>(std::round(p_O(0) * inv_px_size_));
       int y = static_cast<int>(std::round(p_O(1) * inv_px_size_));
@@ -305,7 +331,7 @@ void BIEVRMap::reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::Ma
       }
 
       voxel.bump_img_(y, x) = p_O(2);
-      voxel.intensity_img_(y, x) = intensity_original(i, j);
+      if (with_intensity) voxel.intensity_img_(y, x) = intensity_original(i, j);
       voxel.bump_weights_(y, x) = weights_original(i, j);
       changed(y, x) = 1;
     }
