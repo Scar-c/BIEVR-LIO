@@ -218,6 +218,30 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
   if (N == 0) return out;
 
   // -------------------------------------------------------------------
+  // Debug/ablation bypass mode (preprocessing.enabled == false).
+  // This is NOT the COIN-BIEVR paper default: it keeps the point/intensity
+  // index alignment but skips brightness normalization.
+  // -------------------------------------------------------------------
+  if (!config_.enabled) {
+    double sum = 0.0;
+    out.filtered_min = std::numeric_limits<double>::max();
+    out.filtered_max = std::numeric_limits<double>::lowest();
+    for (size_t i = 0; i < N; ++i) {
+      double v = raw_intensity.size() > i ? raw_intensity(0, i) * config_.raw_intensity_scale
+                                          : 0.0;
+      if (!std::isfinite(v)) v = 0.0;  // sanitize
+      v = std::max(0.0, std::min(255.0, v));  // clamp
+      out.filtered(0, i) = static_cast<float>(v);
+      sum += v;
+      out.filtered_min = std::min(out.filtered_min, v);
+      out.filtered_max = std::max(out.filtered_max, v);
+    }
+    out.num_valid = N;
+    out.filtered_mean = sum / static_cast<double>(N);
+    return out;
+  }
+
+  // -------------------------------------------------------------------
   // 1. Project every point; build the sparse image (nearest owner per pixel)
   //    and the per-point point -> pixel map.
   // -------------------------------------------------------------------
