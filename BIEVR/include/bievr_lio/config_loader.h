@@ -79,24 +79,33 @@ class MergedYaml {
   // Like get(), but `dotted_key` may address a nested leaf, e.g.
   // "preprocessing.enabled" resolves root["intensity"]["preprocessing"]["enabled"].
   // Used by the COIN-BIEVR `intensity` section which is organised in sub-blocks.
+  //
+  // IMPORTANT: this must only use const node access. yaml-cpp's non-const
+  // operator[] can insert/mutate nodes in the shared, ref-counted document
+  // tree, which corrupts later lookups of the same keys.
   template <typename T>
   T getNested(const std::string& section, const std::string& dotted_key,
               const T& default_value) const {
     for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it) {
       const YAML::Node& root = *it;
-      YAML::Node node = root[section];
+      const YAML::Node node = root[section];
       if (!node) continue;
+      // Resolve the dotted path holding each level as a value copy (keeps the
+      // shared document alive) and accessing children only through const refs.
+      std::vector<YAML::Node> path{node};
       std::stringstream ss(dotted_key);
       std::string part;
       bool found = true;
       while (std::getline(ss, part, '.')) {
-        if (!node[part]) {
+        const YAML::Node& parent = path.back();
+        const YAML::Node child = parent[part];
+        if (!child) {
           found = false;
           break;
         }
-        node = node[part];
+        path.push_back(child);
       }
-      if (found) return node.as<T>();
+      if (found) return path.back().as<T>();
     }
     return default_value;
   }

@@ -81,5 +81,28 @@ int main() {
     }
   }
 
+  // --- COIN-BIEVR Avia preset: nested preprocessing values must load ---------
+  // Regression for the getNested() bug (non-const YAML operator[] traversal
+  // used to corrupt the document and silently return defaults for the nested
+  // intensity.preprocessing keys, e.g. vertical_fov_deg / brightness window).
+  {
+    bievr::Config config;
+    if (!bievr::loadConfigFromYaml({config_dir + "/params_coin_bievr_avia.yaml", sensor_file},
+                                   config)) {
+      return fail("params_coin_bievr_avia.yaml + sensor config failed to parse");
+    }
+    const auto& ic = config.pipeline_config.intensity;
+    if (!ic.enabled) return fail("avia preset must have intensity.enabled=true");
+    if (!near(ic.preprocessing.vertical_fov_deg, 77.2)) {
+      return fail("avia preset vertical_fov_deg must load 77.2 (getNested regression)");
+    }
+    if (ic.preprocessing.brightness_window_u != 41 || ic.preprocessing.brightness_window_v != 7) {
+      return fail("avia preset brightness window must load 41x7 (getNested regression)");
+    }
+    if (ic.optimization_enabled) {
+      return fail("avia preset must have intensity.optimization.enabled=false (round-4 isolation)");
+    }
+  }
+
   return 0;
 }
