@@ -1,14 +1,45 @@
-# COIN-BIEVR preset. Load this together with (or instead of) params.yaml to
-# enable the COIN-BIEVR photometric branch. All values not reported by the
-# COIN-BIEVR supplement are marked TBD and must NOT be treated as official
-# paper parameters (second review Section 15).
+# COIN-BIEVR algorithm config preset.
 #
-# Usage (both files are merged, this one wins per leaf):
-#   --params_file config/params.yaml --sensor_config_file config/params_coin_bievr.yaml
-# or point the launch directly at this file.
+# This is a COMPLETE algorithm config (map / preprocess / optimization / imu /
+# debug / max_num_threads / intensity), not an overlay: the ROS1 launch
+# parameter system resolves a single algorithm file per run, e.g.
+#
+#   COIN-BIEVR:
+#     roslaunch bievr_lio_ros process_bag.launch \
+#         sensor_config:=enwide params:=params_coin_bievr rosbag:=/path/to/data.bag
+#
+#   BIEVR baseline:
+#     roslaunch bievr_lio_ros process_bag.launch \
+#         sensor_config:=enwide params:=params rosbag:=/path/to/data.bag
+#
+# where `params` selects this algorithm config (BIEVR vs COIN-BIEVR) and
+# `sensor_config` selects the sensor (topics/extrinsics/ranges) from
+# config/sensor_configs/*. Do NOT pass this file as a sensor_config_file.
+#
+# All values not reported by the COIN-BIEVR supplement are marked TBD and must
+# NOT be treated as official paper parameters.
 
+map:
+  pixel_size_m: 0.05 # Pixel side length [m]
+  voxel_size_m: 0.5 # Voxel side length [m]
+  normal_tolerance_deg: 3 # Normal change threshold to trigger reprojection of voxel image [°]
+  smooth: True # Apply smoothing to the voxel image
+  weighted: True # Weighted pixel update
+  max_size: 1500000 # Maximum number of voxels to keep in the map
+  frame: "odom"
+
+preprocess:
+  downsample_resolution_m: 0.1 # Downsample points to this resolution [m]. In case of informed sampling, this
+  # corresponds to the high resolution voxels
+  informed_sampling: True
+
+optimization:
+  huber_delta: 0.1 # Huber norm threshold
+
+# COIN-BIEVR photometric branch (master switch ON).
+# Values marked TBD are not specified in the COIN-BIEVR supplement.
 intensity:
-  enabled: True # Master switch: enables the COIN-BIEVR photometric branch.
+  enabled: True # Master switch. False = original BIEVR behaviour.
 
   preprocessing:
     enabled: True
@@ -35,3 +66,18 @@ intensity:
   optimization:
     enabled: True
     photometric_scale: 0.02 # lambda; TBD: exact value not reported in the COIN-BIEVR supplement
+
+imu:
+    window_s: 10 # Time window for the inertial optimization [s]
+    t_init: 0.2 # Time to initialize bias and gravity [s]
+    frame: "imu"
+
+debug:
+  publish_all_clouds: False # Publish all clouds (fine, coarse, deskewed)
+  timing: False
+  log: False
+  dashboard: True # Fancy live status print (position, biases, timing, ...)
+  dashboard_ascii_path: "" # ASCII art for the dashboard. Empty = bievr_ascii.txt next to the config.
+  trajectory_path: "" # Path to save trajectory. If empty, logs will not be saved.
+
+max_num_threads: 0 # 0 = automatic, >0 = number of threads to use for parallel processing
