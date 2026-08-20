@@ -117,6 +117,16 @@ struct PhotometricDiagnostics {
   double fd_level_c_validity_switch = 0.0;
   int fd_level_c_noswitch_samples = 0;
   double fd_level_c_noswitch_median = 0.0, fd_level_c_noswitch_p95 = 0.0;
+  // Round-8: near-range (< 1.5 m) photo match statistics (Livox Avia near-range
+  // intensity artifacts; diagnostic only, no filtering applied).
+  double photo_near_fraction = 0.0;          // photo matches with range < 1.5 m
+  double photo_near_r_p50 = 0.0, photo_near_r_p90 = 0.0;
+  double photo_far_r_p50 = 0.0, photo_far_r_p90 = 0.0;
+  // Round-8: geometry weak eigenvalues (lambda1<=lambda2<=lambda3) and the
+  // two-weak-direction flag (10*lambda1 > lambda2), from the Eq.7 degeneracy
+  // analysis. Filled by the pipeline (intensity_samples.weak_eigenvalues).
+  double geo_lambda1 = 0.0, geo_lambda2 = 0.0, geo_lambda3 = 0.0;
+  int geo_two_weak_flag = 0;
 };
 
 // Round-7: per-(lambda, frame) evaluation of the DIRECT robustified photometric

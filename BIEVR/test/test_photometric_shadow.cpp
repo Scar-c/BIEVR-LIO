@@ -96,6 +96,10 @@ int main() {
   const auto& diag = opt_shadow.photometricDiagnostics();
   if (diag.valid_matches <= 0) return fail("shadow mode produced no photo matches");
   if (diag.candidates <= 0) return fail("shadow mode produced no photo candidates");
+  // Round-8 near-range diagnostics must be computed (fraction in [0,1]).
+  if (diag.photo_near_fraction < 0.0 || diag.photo_near_fraction > 1.0) {
+    return fail("near-range photo fraction out of range");
+  }
 
   return 0;
 }

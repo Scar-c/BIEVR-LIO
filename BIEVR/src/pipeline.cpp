@@ -155,7 +155,9 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
              "fd_b_analytic_p50,fd_b_analytic_p90,fd_b_analytic_p99,"
              "fd_b_numeric_p50,fd_b_numeric_p90,fd_b_numeric_p99,"
              "fd_c_voxel_switch,fd_c_cell_switch,fd_c_validity_switch,"
-             "fd_c_noswitch_samples,fd_c_noswitch_median,fd_c_noswitch_p95\n";
+             "fd_c_noswitch_samples,fd_c_noswitch_median,fd_c_noswitch_p95,"
+             "photo_near_fraction,photo_near_r_p50,photo_near_r_p90,photo_far_r_p50,photo_far_r_p90,"
+             "geo_lambda1,geo_lambda2,geo_lambda3,geo_two_weak_flag\n";
     } else {
       LOG(E, "Failed to open photometric diagnostics CSV at "
                  << config_.photo_diagnostics_path);
@@ -447,7 +449,14 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
 
   // Per-frame photometric safety diagnostics CSV (round-5, debug config only).
   if (photo_diag_csv_ && (reg_config.photometric_residual || reg_config.shadow_photometric)) {
-    writePhotometricDiagnostics(header.stamp, optimizer.photometricDiagnostics());
+    auto diag = optimizer.photometricDiagnostics();
+    // Round-8: geometry weak-eigenvalue diagnostics from the Eq.7 degeneracy
+    // analysis (available per frame from the intensity sampling).
+    diag.geo_lambda1 = intensity_samples.weak_eigenvalues.x();
+    diag.geo_lambda2 = intensity_samples.weak_eigenvalues.y();
+    diag.geo_lambda3 = intensity_samples.weak_eigenvalues.z();
+    diag.geo_two_weak_flag = (10.0 * diag.geo_lambda1 > diag.geo_lambda2) ? 1 : 0;
+    writePhotometricDiagnostics(header.stamp, diag);
   }
 
   // Per-(lambda, frame) robust shadow scan CSV (round-7, debug config only).
@@ -524,7 +533,11 @@ void Pipeline::writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiag
                    << d.fd_level_b_numeric_p90 << "," << d.fd_level_b_numeric_p99 << ","
                    << d.fd_level_c_voxel_switch << "," << d.fd_level_c_cell_switch << ","
                    << d.fd_level_c_validity_switch << "," << d.fd_level_c_noswitch_samples << ","
-                   << d.fd_level_c_noswitch_median << "," << d.fd_level_c_noswitch_p95 << "\n";
+                   << d.fd_level_c_noswitch_median << "," << d.fd_level_c_noswitch_p95 << ","
+                   << d.photo_near_fraction << "," << d.photo_near_r_p50 << ","
+                   << d.photo_near_r_p90 << "," << d.photo_far_r_p50 << "," << d.photo_far_r_p90
+                   << "," << d.geo_lambda1 << "," << d.geo_lambda2 << "," << d.geo_lambda3 << ","
+                   << d.geo_two_weak_flag << "\n";
 }
 
 void Pipeline::writeRobustShadowScan(uint64_t stamp,

@@ -593,6 +593,33 @@ void LsqRegistration::finalizePhotoDiagnostics(const Transform& T_W_L,
   d.J_norm_max = j_norm.empty() ? 0.0 : *std::max_element(j_norm.begin(), j_norm.end());
   for (int k = 0; k < 6; ++k) d.J_dof_p90[k] = pct(j_dof[k], 0.90);
 
+  // Round-8: near-range (< 1.5 m) photo match statistics (Avia near-range
+  // intensity artifacts; diagnostic only, no filtering).
+  {
+    std::vector<double> near_r, far_r;
+    size_t near_count = 0;
+    for (const auto& s : photo_samples_) {
+      if (s.p_j.norm() < 1.5) {
+        ++near_count;
+        near_r.push_back(std::abs(s.r));
+      } else {
+        far_r.push_back(std::abs(s.r));
+      }
+    }
+    d.photo_near_fraction =
+        photo_samples_.empty() ? 0.0 : static_cast<double>(near_count) / photo_samples_.size();
+    if (!near_r.empty()) {
+      std::sort(near_r.begin(), near_r.end());
+      d.photo_near_r_p50 = quantileSorted(near_r, 0.50);
+      d.photo_near_r_p90 = quantileSorted(near_r, 0.90);
+    }
+    if (!far_r.empty()) {
+      std::sort(far_r.begin(), far_r.end());
+      d.photo_far_r_p50 = quantileSorted(far_r, 0.50);
+      d.photo_far_r_p90 = quantileSorted(far_r, 0.90);
+    }
+  }
+
   // Hessian / gradient norms. photo H/b are lambda^2-scaled (the Accumulator
   // scales r and J by lambda before add()).
   d.H_geo_fro = geo_acc.H.norm();
