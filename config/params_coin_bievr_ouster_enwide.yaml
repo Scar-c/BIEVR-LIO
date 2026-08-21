@@ -28,6 +28,9 @@ map:
 preprocess:
   downsample_resolution_m: 0.1
   informed_sampling: True
+  point_filter_num: 4 # COIN-LIO mapping/point_filter_num (keep every 5th point
+  # of the undistorted cloud for the geometry registration + map update; the
+  # intensity image/sampling keep the full cloud, matching COIN-LIO)
 
 optimization:
   huber_delta: 0.1

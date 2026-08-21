@@ -302,6 +302,8 @@ inline bool loadConfigFromYaml(const std::vector<std::string>& yaml_paths, Confi
     return false;
   }
   hc.preprocess.informed_sampling = yaml.get<bool>("preprocess", "informed_sampling", false);
+  hc.preprocess.point_filter_num =
+      yaml.get<int>("preprocess", "point_filter_num", hc.preprocess.point_filter_num);
 
   // --- optimization ---
   if (!config_internal::getPositive(yaml, "optimization", "huber_delta", 100.,

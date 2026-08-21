@@ -12,6 +12,12 @@ struct PreprocessConfig {
   double min_range = 0.5;              // meters
   double max_range = 100.0;            // meters
   double downsample_resolution = 0.1;  // meters
+  // COIN-LIO mapping/point_filter_num: keep every (N+1)-th point of the
+  // undistorted cloud for the GEOMETRY registration + map-update path (N = 4
+  // in the COIN-LIO ENWIDE config: 1 of every 5 points). The intensity
+  // preprocessing / sampling keep the FULL cloud (COIN-LIO builds its intensity
+  // image from the full undistorted cloud). 1 = no skip (default).
+  int point_filter_num = 1;
 };
 
 void voxelDownsample(const Pointcloud& points_raw, Pointcloud& points_down, double voxel_size);

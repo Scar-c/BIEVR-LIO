@@ -318,10 +318,43 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     return;
   }
 
+  // COIN-LIO mapping/point_filter_num: sparse-skip the undistorted cloud for the
+  // GEOMETRY registration + map-update path (keep every (N+1)-th point; N=4 in
+  // the COIN-LIO ENWIDE config). The intensity preprocessing and sampling keep
+  // the FULL cloud (COIN-LIO builds its intensity image from the full
+  // undistorted cloud). Subsets stay index-aligned (cloud/ranges/intensity).
+  Pointcloud reg_cloud;
+  std::vector<double> reg_ranges;
+  Intensities reg_intensity;
+  Pointcloud* reg_cloud_p = &points_undistorted_I;
+  std::vector<double>* reg_ranges_p = &ranges;
+  Intensities* reg_intensity_p = &filtered_intensity;
+  const int pf_num = config_.preprocess.point_filter_num;
+  if (pf_num > 1) {
+    const size_t step = static_cast<size_t>(pf_num);
+    const size_t n_kept = (points_undistorted_I.size() + step - 1) / step;
+    reg_cloud.resize(n_kept);
+    reg_ranges.resize(n_kept);
+    if (intensity_enabled && filtered_intensity.cols() > 0) {
+      reg_intensity = Intensities(1, n_kept);
+    }
+    size_t k = 0;
+    for (size_t i = 0; i < points_undistorted_I.size(); i += step, ++k) {
+      reg_cloud[k] = points_undistorted_I[i];
+      reg_ranges[k] = ranges[i];
+      if (intensity_enabled && filtered_intensity.cols() > 0) {
+        reg_intensity(0, k) = filtered_intensity(0, i);
+      }
+    }
+    reg_cloud_p = &reg_cloud;
+    reg_ranges_p = &reg_ranges;
+    if (intensity_enabled && filtered_intensity.cols() > 0) reg_intensity_p = &reg_intensity;
+  }
+
   // Select points from the source cloud that will be used for registration
   timing::Timer voxel_timer("04_sampling");
   Pointcloud source_filtered, source_coarse, source_fine;
-  sampleSource(points_undistorted_I, T_W_I_init, source_filtered, source_coarse, source_fine);
+  sampleSource(*reg_cloud_p, T_W_I_init, source_filtered, source_coarse, source_fine);
   voxel_timer.Stop();
 
   // COIN-BIEVR: intensity point sampling (top-N intensity voxels along the
@@ -377,9 +410,10 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
 
   // Transform the full cloud using the estimated pose and add it to the map
   timing::Timer map_timer("06_map");
-  const Pointcloud points_registered = T_W_I * points_undistorted_I;
-  map_->integratePoints(points_registered, &ranges,
-                        intensity_enabled ? &filtered_intensity : nullptr);
+  const Pointcloud points_registered = T_W_I * *reg_cloud_p;
+  map_->integratePoints(points_registered, reg_ranges_p,
+                        (intensity_enabled && reg_intensity_p->cols() > 0) ? reg_intensity_p
+                                                                         : nullptr);
   map_timer.Stop();
 
   // Bookkeeping and optimization of the intertial part of the state
