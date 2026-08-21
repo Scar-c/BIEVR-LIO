@@ -582,6 +582,34 @@ every 4 points, ratio 0.25). Remaining known-but-not-fixed parallel risks (only
 recorded): selection/downsample comparator total ordering, unordered_map
 iteration, map-integration ordering, TBB reduction internals.
 
+## 7n. Round 12 (post-vector<bool>-fix Shield re-benchmark + Round 11 retrospective)
+
+Retrospective (docs/ROUND11_PARALLEL_DETERMINISM_LESSONS.md): the vector<bool>
+packed-bit race in the reproduction's NEW intensity informed-sampling path was
+NEITHER an original BIEVR bug NOR a COIN-BIEVR math/design bug - an
+implementation bug. Six new engineering rules established (no vector<bool>
+parallel masks; reuse BIEVR parallel dataflow patterns for isomorphic flows;
+serial fixture + parallel fixture mandatory; repeated-run determinism gate before
+benchmarks; trigger vs correctness distinction; one-variable repair). Old Round10
+Shield C1 values are HISTORICAL_ONLY (PRE_FIX / NOT_AUTHORITATIVE).
+
+Round12 re-benchmark (HEAD 04717fd, Avia frozen, point_filter_num=1, full bags,
+strict sequential, official GEODE evaluator):
+| seq | B0 | C0 | C1 (A=B) | C1 gate | trend |
+|---|---:|---:|---:|---|---|
+| Shield1 | 0.3946 | 0.4384 | 0.4208 | PASS (bitwise) | MILD_WORSE +6.6% |
+| Shield4 | 1.8874 | 2.0364 | 2.0483 | PASS (bitwise) | MILD_WORSE +8.5% |
+| Shield5 | 3305 DIVERGED | 2.0162 | 2.0264 | PASS (bitwise) | B0_DIVERGED_C1_STABLE |
+- C1-A == C1-B bitwise on all three Shields (traj+photo SHA equal) -> the race
+  fix made the Avia photometric path deterministic too.
+- Post-fix photometric trend: the paper's "photo improves on Shield1/4" is NOT
+  reproduced (MILD_WORSE). Shield5 current-head B0 still diverges (known
+  baseline regression, original public SHA 2.04 m stable; NOT fixed this round).
+- Shield4 old pre-fix C1 1.7772 -> post-fix 2.0483 (race-affected old value
+  superseded).
+- C0 vs B0 side effect: Shield1 +11.1% (PIPELINE_LARGE_SIDE_EFFECT), Shield4
+  +7.9% (PIPELINE_SIDE_EFFECT), Shield5 B0 diverged / C0 stable.
+
 ## 3. Per-commit Changed Files
 
 **1. `460a04a` refactor(map): MapPoint**
