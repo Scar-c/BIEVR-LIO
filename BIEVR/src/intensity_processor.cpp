@@ -95,6 +95,9 @@ Eigen::MatrixXd maskedBoxAverage(const Eigen::MatrixXf& values, const Eigen::Mat
 IntensityProcessor::IntensityProcessor(const IntensityProcessorConfig& config) : config_(config) {}
 
 bool IntensityProcessor::projectPoint(const Point& p, int& u, int& v) const {
+  if (config_.projection == "ouster_lut") {
+    return projectPointOuster(p, u, v);
+  }
   const double r = p.norm();
   if (!std::isfinite(r) || r < 1e-6) return false;
 
@@ -108,6 +111,76 @@ bool IntensityProcessor::projectPoint(const Point& p, int& u, int& v) const {
   // Raw pixel (may lie outside the image; clamped by the caller).
   u = static_cast<int>(std::lround(-W / (2.0 * kPi) * az + W / 2.0));
   v = static_cast<int>(std::lround(-H / fov_rad * el + H / 2.0));
+  return true;
+}
+
+// Geometric azimuth column only (COIN-LIO projectPoint u part). Used for the
+// ring-based Ouster image construction (row = ring). Returns false for
+// non-finite / zero-range points or when the column is outside [0, cols).
+bool IntensityProcessor::projectPointOusterCol(const Point& p, int& u) const {
+  const int cols = config_.image_width;
+  const double beam_offset = config_.ouster_beam_offset_m;
+  const double L = std::hypot(p.x(), p.y()) - beam_offset;
+  const double R = std::sqrt(p.z() * p.z() + L * L);
+  if (!std::isfinite(R) || R < 1e-6) return false;
+  const double phi = std::atan2(p.y(), p.x());
+  const double fx = -static_cast<double>(cols) / (2.0 * kPi);
+  const double cx = cols / 2.0;
+  u = static_cast<int>(std::lround(fx * phi + cx - config_.ouster_u_shift));
+  if (u < 0 || u >= cols) return false;
+  return true;
+}
+
+// COIN-LIO Projector::projectPoint port (src/projector.cpp, COIN-LIO commit
+// 76729cc4feb3649cbd79d28f82d9f62a2c82889b): spherical model with the beam
+// offset, K matrix from the factory beam-altitude angles, and subpixel row
+// interpolation against the elevation lookup table. u_shift is applied on the
+// column (0 for ENWIDE). Returns false for points outside the beam vertical FOV
+// (the LUT rows bound the image exactly, so vertical clamping is never needed).
+bool IntensityProcessor::projectPointOuster(const Point& p, int& u, int& v) const {
+  const auto& elev = config_.ouster_beam_altitude_angles;  // degrees, descending
+  const int rows = config_.image_height;
+  const int cols = config_.image_width;
+  if (elev.size() < 2 || static_cast<int>(elev.size()) != rows) return false;
+
+  // Beam altitudes in radians (COIN-LIO converts the loaded angles to rad).
+  std::vector<double> elev_rad(elev.size());
+  for (size_t i = 0; i < elev.size(); ++i) elev_rad[i] = elev[i] * kPi / 180.0;
+
+  const double fy = -static_cast<double>(rows) /
+                    std::abs(elev_rad[0] - elev_rad[elev_rad.size() - 1]);
+  const double fx = -static_cast<double>(cols) / (2.0 * kPi);
+  const double cy = rows / 2.0;
+  const double cx = cols / 2.0;
+
+  const double beam_offset = config_.ouster_beam_offset_m;
+  const double L = std::hypot(p.x(), p.y()) - beam_offset;
+  const double R = std::sqrt(p.z() * p.z() + L * L);
+  if (!std::isfinite(R) || R < 1e-6) return false;
+  const double phi = std::atan2(p.y(), p.x());
+  const double theta = std::asin(std::max(-1.0, std::min(1.0, p.z() / R)));
+
+  double uf = fx * phi + cx;
+
+  if (theta > elev_rad[0] || theta < elev_rad[rows - 1]) return false;
+
+  // Row via the elevation LUT with subpixel interpolation (exact COIN-LIO logic).
+  double vf;
+  auto greater = (std::upper_bound(elev_rad.rbegin(), elev_rad.rend(), theta) + 1).base();
+  auto smaller = greater + 1;
+  if (greater == elev_rad.end()) {
+    vf = rows - 1;
+  } else {
+    vf = std::distance(elev_rad.begin(), greater);
+    vf += (*greater - theta) / (*greater - *smaller);
+  }
+
+  // Apply u_shift on the column (ENWIDE official u_shift = 0).
+  uf -= config_.ouster_u_shift;
+
+  u = static_cast<int>(std::lround(uf));
+  v = static_cast<int>(std::lround(vf));
+  if (u < 0 || u >= cols || v < 0 || v >= rows) return false;
   return true;
 }
 
@@ -191,6 +264,40 @@ Eigen::MatrixXd IntensityProcessor::brightnessImage(const ProjectedIntensityImag
   return maskedBoxAverage(image.intensity, image.point_index, wu, wv);
 }
 
+// Full-window box average over ALL pixels (including empty/zero), matching the
+// COIN-LIO Ouster `cv::blur` brightness used before normalization. Used when
+// sparse_brightness == false (ENWIDE Ouster reproduction).
+Eigen::MatrixXd IntensityProcessor::brightnessImageFull(const ProjectedIntensityImage& image) const {
+  const int W = config_.image_width;
+  const int H = config_.image_height;
+  const int window_u = config_.brightness_window_u > 0 ? config_.brightness_window_u : W;
+  const int window_v = config_.brightness_window_v > 0 ? config_.brightness_window_v : H;
+
+  // Plain box average (zeros included) via prefix sums.
+  Eigen::MatrixXd P = Eigen::MatrixXd::Zero(H + 1, W + 1);
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      P(y + 1, x + 1) =
+          static_cast<double>(image.intensity(y, x)) + P(y, x + 1) + P(y + 1, x) - P(y, x);
+    }
+  }
+  const int half_u = window_u / 2;
+  const int half_v = window_v / 2;
+  Eigen::MatrixXd brightness(H, W);
+  for (int y = 0; y < H; ++y) {
+    const int r0 = std::max(0, y - half_v);
+    const int r1 = std::min(H, y + half_v + 1);
+    for (int x = 0; x < W; ++x) {
+      const int c0 = std::max(0, x - half_u);
+      const int c1 = std::min(W, x + half_u + 1);
+      const double area = static_cast<double>((r1 - r0) * (c1 - c0));
+      const double sum = P(r1, c1) - P(r0, c1) - P(r1, c0) + P(r0, c0);
+      brightness(y, x) = area > 0.0 ? sum / area : 0.0;
+    }
+  }
+  return brightness;
+}
+
 void IntensityProcessor::removeLines(Eigen::MatrixXf& image, const Eigen::MatrixXi& mask) const {
   const int H = image.rows();
   const int W = image.cols();
@@ -214,6 +321,67 @@ void IntensityProcessor::removeLines(Eigen::MatrixXf& image, const Eigen::Matrix
   for (int y = 0; y < H; ++y) {
     for (int x = 0; x < W; ++x) {
       if (mask(y, x) <= 0) continue;
+      image(y, x) -= lpf(y, x);
+      if (image(y, x) < 0.0f) image(y, x) = 0.0f;
+    }
+  }
+}
+
+// COIN-LIO official ENWIDE line-artifact removal (src/image_processing.cpp
+// ImageProcessor::removeLines, COIN-LIO commit
+// 76729cc4feb3649cbd79d28f82d9f62a2c82889b): vertical high-pass FIR then
+// horizontal low-pass FIR, subtract the line signal and clamp to >= 0.
+// Coefficients are the official config/line_removal.yaml (SHA256
+// db0be90e9187a48ff4ba227f86f57dbaafe282fddf0740f335ee27ff9a06ca7f), which is
+// symmetric (linear-phase), so correlation == convolution.
+void IntensityProcessor::removeLinesOuster(Eigen::MatrixXf& image) const {
+  const int H = image.rows();
+  const int W = image.cols();
+  constexpr double kHp[33] = {-0.00122687,  -0.00152587,  0.0009631,    0.00382838,
+                              0.00071422,   -0.00765637,  -0.00681285,  0.01015542,
+                              0.01944999,   -0.00536835,  -0.03792929,  -0.01565801,
+                              0.05816374,   0.07138264,   -0.07402277,  -0.30572514,
+                              0.5802669,    -0.30572514,  -0.07402277,  0.07138264,
+                              0.05816374,   -0.01565801,  -0.03792929,  -0.00536835,
+                              0.01944999,   0.01015542,   -0.00681285,  -0.00765637,
+                              0.00071422,   0.00382838,   0.0009631,    -0.00152587,
+                              -0.00122687};
+  constexpr double kLp[32] = {-0.0013038,  -0.00117813, -0.00102349, -0.00051396, 0.000759,
+                              0.00322145,  0.00724004,  0.01304552,  0.02066957,  0.02990645,
+                              0.04030759,  0.0512121,   0.06181081,  0.07123596,  0.07866427,
+                              0.08341891,  0.08505541,  0.08341891,  0.07866427,  0.07123596,
+                              0.06181081,  0.0512121,   0.04030759,  0.02990645,  0.02066957,
+                              0.01304552,  0.00724004,  0.00322145,  0.000759,    -0.00051396,
+                              -0.00102349, -0.00117813};
+
+  // Vertical high-pass (per column).
+  Eigen::MatrixXf hpf = Eigen::MatrixXf::Zero(H, W);
+  for (int x = 0; x < W; ++x) {
+    for (int y = 0; y < H; ++y) {
+      double acc = 0.0;
+      for (int k = 0; k < 33; ++k) {
+        const int yy = y + k - 16;
+        if (yy < 0 || yy >= H) continue;
+        acc += kHp[k] * image(yy, x);
+      }
+      hpf(y, x) = static_cast<float>(acc);
+    }
+  }
+  // Horizontal low-pass (per row) of the high-passed image.
+  Eigen::MatrixXf lpf = Eigen::MatrixXf::Zero(H, W);
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      double acc = 0.0;
+      for (int k = 0; k < 32; ++k) {
+        const int xx = x + k - 15;
+        if (xx < 0 || xx >= W) continue;
+        acc += kLp[k] * hpf(y, xx);
+      }
+      lpf(y, x) = static_cast<float>(acc);
+    }
+  }
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
       image(y, x) -= lpf(y, x);
       if (image(y, x) < 0.0f) image(y, x) = 0.0f;
     }
@@ -258,7 +426,8 @@ void IntensityProcessor::gaussianBlur(Eigen::MatrixXf& image, const Eigen::Matri
 }
 
 IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L,
-                                                      const IntensityView& raw_intensity) {
+                                                      const IntensityView& raw_intensity,
+                                                      const IntensityView* rings) {
   IntensityProcessingResult out;
   const size_t N = points_L.size();
   out.input_points = N;
@@ -272,6 +441,9 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
   out.filtered_max = 0.0;
   out.filtered_mean = 0.0;
   if (N == 0) return out;
+
+  // Ring-based Ouster image construction (row = ring, col = geometric azimuth).
+  const bool ring_based = config_.projection == "ouster_lut" && rings != nullptr;
 
   // -------------------------------------------------------------------
   // Debug/ablation bypass mode (preprocessing.enabled == false).
@@ -361,7 +533,17 @@ IntensityProcessingResult IntensityProcessor::process(const Pointcloud& points_L
     }
 
     int u = 0, v = 0;
-    if (!projectPoint(points_L[i], u, v)) {
+    bool projected;
+    if (ring_based) {
+      // Row = Ouster ring/beam index; column = geometric azimuth.
+      const int ring = static_cast<int>(std::lround((*rings)(0, i)));
+      projected = ring >= 0 && ring < config_.image_height &&
+                  projectPointOusterCol(points_L[i], u);
+      v = ring;
+    } else {
+      projected = projectPoint(points_L[i], u, v);
+    }
+    if (!projected) {
       out.point_pixel_idx[i] = -1;
       ++out.num_invalid;
       continue;
@@ -456,17 +638,28 @@ Eigen::MatrixXf IntensityProcessor::normalizeImage(const Eigen::MatrixXf& intens
                                                    const Eigen::MatrixXi& mask) const {
   Eigen::MatrixXf image = intensity_image;
 
-  if (config_.remove_lines) {
-    removeLines(image, mask);
+  // COIN-LIO Ouster: scale the raw intensity channel by image/intensity_scale
+  // before line removal / brightness normalization (reflectivity_=false path).
+  if (config_.projection == "ouster_lut") {
+    image *= static_cast<float>(config_.ouster_intensity_scale);
   }
 
-  // Sparse brightness normalization: only non-empty pixels are averaged into
-  // the brightness denominator (COIN-BIEVR modification of COIN-LIO's cv::blur).
+  if (config_.remove_lines) {
+    if (config_.projection == "ouster_lut") {
+      removeLinesOuster(image);
+    } else {
+      removeLines(image, mask);
+    }
+  }
+
   ProjectedIntensityImage img;
   img.intensity = image;
   img.point_index = mask;
   img.valid = (mask.array() > 0).cast<uint8_t>();
-  const Eigen::MatrixXd I_B = brightnessImage(img);
+  // Avia: sparse brightness (only non-empty pixels). Ouster ENWIDE: full-window
+  // box over all pixels (COIN-LIO cv::blur semantics).
+  const Eigen::MatrixXd I_B =
+      config_.sparse_brightness ? brightnessImage(img) : brightnessImageFull(img);
   const double s = config_.normalization_scale;
 
   for (int v = 0; v < image.rows(); ++v) {

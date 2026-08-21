@@ -164,7 +164,12 @@ Pipeline::Pipeline(const Config& config) : config_(config) {
              "candidate_score_p50,candidate_score_p90,candidate_score_p99,"
              "q_geo_v1,q_geo_v2,q_photo_v1,q_photo_v2,"
              "s_geo_v1,s_geo_v2,s_photo_v1,s_photo_v2,"
-             "parity_count_serial,parity_count_parallel,parity_cost_rel,parity_H_rel,parity_b_rel\n";
+             "parity_count_serial,parity_count_parallel,parity_cost_rel,parity_H_rel,parity_b_rel,"
+             "source_near_fraction,photo_near_r_p95,photo_far_r_p95,"
+             "photo_near_inlier_fraction,photo_far_inlier_fraction,"
+             "photo_near_grad_p50,photo_near_grad_p90,photo_far_grad_p50,photo_far_grad_p90,"
+             "photo_near_J_p50,photo_near_J_p90,photo_far_J_p50,photo_far_J_p90,"
+             "photo_near_H_fraction\n";
     } else {
       LOG(E, "Failed to open photometric diagnostics CSV at "
                  << config_.photo_diagnostics_path);
@@ -232,8 +237,11 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
   if (intensity_enabled) {
     timing::Timer inten_timer("02a_intensity_preprocess");
     const Pointcloud points_lidar = filtered_L;
+    // Ouster ring/beam channel (index-aligned with filtered_L), used by the
+    // ring-based Ouster intensity image construction.
+    const IntensityView rings = filtered_L.rings();
     const auto t0 = std::chrono::steady_clock::now();
-    intensity_result = intensity_processor_.process(points_lidar, intensities);
+    intensity_result = intensity_processor_.process(points_lidar, intensities, &rings);
     const auto t1 = std::chrono::steady_clock::now();
     filtered_intensity = std::move(intensity_result.filtered);
     intensity_preprocess_ms =
@@ -469,6 +477,15 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     diag.geo_lambda2 = intensity_samples.weak_eigenvalues.y();
     diag.geo_lambda3 = intensity_samples.weak_eigenvalues.z();
     diag.geo_two_weak_flag = (10.0 * diag.geo_lambda1 > diag.geo_lambda2) ? 1 : 0;
+    // Round-10: fraction of the intensity SOURCE points (IMU frame) with
+    // range < 1.5 m (Avia near-range artifact exposure).
+    if (!intensity_samples.points.empty()) {
+      size_t near_src = 0;
+      for (size_t pi = 0; pi < intensity_samples.points.size(); ++pi) {
+        if (intensity_samples.points[pi].norm() < 1.5) ++near_src;
+      }
+      diag.source_near_fraction = static_cast<double>(near_src) / intensity_samples.points.size();
+    }
     // Round-9 weak-direction audit (diagnostic only; sections 42-49).
     if (intensity_enabled) {
       diag.eta_world = intensity_samples.weak_direction;
@@ -635,7 +652,14 @@ void Pipeline::writePhotometricDiagnostics(uint64_t stamp, const PhotometricDiag
                    << d.q_photo_v1 << "," << d.q_photo_v2 << "," << d.s_geo_v1 << ","
                    << d.s_geo_v2 << "," << d.s_photo_v1 << "," << d.s_photo_v2 << ","
                    << d.parity_count_serial << "," << d.parity_count_parallel << ","
-                   << d.parity_cost_rel << "," << d.parity_H_rel << "," << d.parity_b_rel << "\n";
+                   << d.parity_cost_rel << "," << d.parity_H_rel << "," << d.parity_b_rel << ","
+                   << d.source_near_fraction << "," << d.photo_near_r_p95 << ","
+                   << d.photo_far_r_p95 << "," << d.photo_near_inlier_fraction << ","
+                   << d.photo_far_inlier_fraction << "," << d.photo_near_grad_p50 << ","
+                   << d.photo_near_grad_p90 << "," << d.photo_far_grad_p50 << ","
+                   << d.photo_far_grad_p90 << "," << d.photo_near_J_p50 << ","
+                   << d.photo_near_J_p90 << "," << d.photo_far_J_p50 << ","
+                   << d.photo_far_J_p90 << "," << d.photo_near_H_fraction << "\n";
 }
 
 void Pipeline::writeRobustShadowScan(uint64_t stamp,

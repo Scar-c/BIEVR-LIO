@@ -191,10 +191,10 @@ bool livoxToStampedIntensity(const LivoxMsgT& pointcloud_msg, uint64_t base_stam
   for (const auto& pt : pointcloud_msg.points) {
     const double time = static_cast<double>(pt.offset_time) * kToSeconds;  // seconds
     if (time > 0.2) {
-      stamped_pointcloud.data().col(counter) << 0, 0, 0, 0, 0;
+      stamped_pointcloud.data().col(counter) << 0, 0, 0, 0, 0, 0;
     } else {
       stamped_pointcloud.data().col(counter) << pt.x, pt.y, pt.z, time,
-          static_cast<double>(pt.reflectivity);
+          static_cast<double>(pt.reflectivity), 0.0;
     }
     ++counter;
   }
@@ -287,13 +287,21 @@ bool msgToPointcloud(const PointCloud2T& pointcloud_msg,
     LOG_FIRST(W, 1, "Pointcloud has no float32 'intensity' field; intensity set to zero.");
   }
 
+  // Optional uint16 ring/beam channel (Ouster; used by the ring-based intensity
+  // image construction). 0 when absent.
+  const PointFieldT* ring_field = findField(fields, "ring");
+  const bool has_ring =
+      ring_field != nullptr && ring_field->datatype == PointFieldT::UINT16;
+  const uint32_t off_ring = has_ring ? ring_field->offset : 0;
+
   stamped_pointcloud.resize(num_points);
   auto& data = stamped_pointcloud.data();
+  if (!has_ring) stamped_pointcloud.rings().setZero();
   const uint8_t* base = pointcloud_msg.data.data();
   const size_t step = pointcloud_msg.point_step;
   const double stamp_s = stampToS(pointcloud_msg.header.stamp);
 
-  // Fill xyz, time and intensity in a single parallel pass. Each point writes its
+  // Fill xyz, time, intensity and ring in a single parallel pass. Each point writes its
   // own (contiguous, column-major) column, so the writes are disjoint.
   tbb::parallel_for(
       tbb::blocked_range<size_t>(0, num_points), [&](const tbb::blocked_range<size_t>& r) {
@@ -327,6 +335,7 @@ bool msgToPointcloud(const PointCloud2T& pointcloud_msg,
             col(0) = col(1) = col(2) = col(3) = 0.0;
           }
           col(4) = has_intensity ? static_cast<double>(readAt<float>(p + off_i)) : 0.0;
+          if (has_ring) col(5) = static_cast<double>(readAt<uint16_t>(p + off_ring));
         }
       });
 

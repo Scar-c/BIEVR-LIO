@@ -337,6 +337,64 @@ inline bool loadConfigFromYaml(const std::vector<std::string>& yaml_paths, Confi
       "intensity", "preprocessing.raw_intensity_scale", pre.raw_intensity_scale);
   pre.use_ouster_lut =
       yaml.getNested<bool>("intensity", "preprocessing.use_ouster_lut", pre.use_ouster_lut);
+  // Round-10: ENWIDE Ouster factory-calibrated projection. The metadata is the
+  // official os_enwide.json converted to YAML (config/ouster/enwide_metadata.yaml;
+  // SHA256 recorded in the file). Algorithm parameters stay fixed; only the
+  // sensor-specific intensity preprocessing differs.
+  pre.ouster_metadata_path = yaml.getNested<std::string>(
+      "intensity", "preprocessing.ouster_metadata_path", pre.ouster_metadata_path);
+  pre.ouster_u_shift =
+      yaml.getNested<int>("intensity", "preprocessing.ouster_u_shift", pre.ouster_u_shift);
+  pre.ouster_intensity_scale = yaml.getNested<double>(
+      "intensity", "preprocessing.ouster_intensity_scale", pre.ouster_intensity_scale);
+  pre.sparse_brightness = yaml.getNested<bool>("intensity", "preprocessing.sparse_brightness",
+                                               pre.sparse_brightness);
+
+  if (pre.projection == "ouster_lut") {
+    // Resolve the metadata path relative to the config file directory when it is
+    // relative (the default config ships a repo-relative path).
+    if (!pre.ouster_metadata_path.empty() && !std::filesystem::exists(pre.ouster_metadata_path)) {
+      for (const std::string& p : yaml_paths) {
+        if (p.empty()) continue;
+        const auto cand = std::filesystem::path(p).parent_path() / pre.ouster_metadata_path;
+        if (std::filesystem::exists(cand)) {
+          pre.ouster_metadata_path = cand.string();
+          break;
+        }
+      }
+    }
+    const YAML::Node meta = YAML::LoadFile(pre.ouster_metadata_path);
+    if (!meta["beam_intrinsics"] || !meta["lidar_data_format"]) {
+      LOG(E, "Ouster metadata missing required sections in "
+                 << pre.ouster_metadata_path);
+      return false;
+    }
+    for (const auto& v : meta["beam_intrinsics"]["beam_altitude_angles"]) {
+      pre.ouster_beam_altitude_angles.push_back(v.as<double>());
+    }
+    for (const auto& v : meta["beam_intrinsics"]["beam_azimuth_angles"]) {
+      pre.ouster_beam_azimuth_angles.push_back(v.as<double>());
+    }
+    for (const auto& v : meta["lidar_data_format"]["pixel_shift_by_row"]) {
+      pre.ouster_pixel_shift_by_row.push_back(v.as<int>());
+    }
+    pre.ouster_beam_offset_m =
+        meta["beam_intrinsics"]["lidar_origin_to_beam_origin_mm"].as<double>() * 1e-3;
+    const int meta_cols = meta["lidar_data_format"]["columns_per_frame"].as<int>();
+    const int meta_rows = meta["lidar_data_format"]["pixels_per_column"].as<int>();
+    if (meta_rows != pre.image_height || meta_cols != pre.image_width) {
+      LOG(W, "Ouster metadata image " << meta_cols << "x" << meta_rows
+                                      << " overrides configured " << pre.image_width << "x"
+                                      << pre.image_height);
+      pre.image_width = meta_cols;
+      pre.image_height = meta_rows;
+    }
+    if (static_cast<int>(pre.ouster_beam_altitude_angles.size()) != pre.image_height) {
+      LOG(E, "Ouster beam altitude angle count " << pre.ouster_beam_altitude_angles.size()
+                                                 << " != image height " << pre.image_height);
+      return false;
+    }
+  }
 
   auto& samp = ic.sampling;
   samp.enabled = yaml.getNested<bool>("intensity", "sampling.enabled", samp.enabled);

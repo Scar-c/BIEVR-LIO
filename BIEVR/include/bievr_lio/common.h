@@ -20,9 +20,11 @@ using QuatMap = Eigen::Map<const Quaternion>;
 
 // xyz + per-point time offset (row 3) + intensity (row 4). The intensity rides
 // along as the last row so it survives range filtering and undistortion without
-// any of those stages having to touch it.
-struct StampedIntensityPoint : public Eigen::Matrix<double, 5, 1> {
-  using Base = Eigen::Matrix<double, 5, 1>;
+// any of those stages having to touch it. Row 5 = Ouster ring/beam index (round
+// 10-B, used only by the Ouster ring-based intensity image construction; 0 for
+// non-Ouster clouds). Carried as a plain channel like time/intensity.
+struct StampedIntensityPoint : public Eigen::Matrix<double, 6, 1> {
+  using Base = Eigen::Matrix<double, 6, 1>;
   using Base::Base;
   StampedIntensityPoint(const Eigen::Vector3d&) = delete;  // forbid implicit conv
 };
@@ -178,9 +180,11 @@ inline Pointcloud transformPoints(const Transform& T, const PointcloudBase<Point
 
 class StampedIntensityPointcloud : public PointcloudBase<StampedIntensityPoint> {
  public:
-  // Layout: rows 0-2 = xyz, row 3 = per-point time offset, row 4 = intensity.
+  // Layout: rows 0-2 = xyz, row 3 = per-point time offset, row 4 = intensity,
+  // row 5 = Ouster ring/beam index (0 when unused).
   static constexpr int kTimeRow = 3;
   static constexpr int kIntensityRow = 4;
+  static constexpr int kRingRow = 5;
   // Non-const overloads return a writable block view (used while filling the cloud
   // from a message). Const overloads return a zero-copy strided view onto the row,
   // which downstream stages read without rewriting the data.
@@ -188,6 +192,8 @@ class StampedIntensityPointcloud : public PointcloudBase<StampedIntensityPoint> 
   TimeView times() const { return rowView(kTimeRow); }
   Eigen::Block<PointcloudData> intensities() { return data_.bottomRows(1); }
   IntensityView intensities() const { return rowView(kIntensityRow); }
+  Eigen::Block<PointcloudData> rings() { return data_.middleRows(kRingRow, 1); }
+  IntensityView rings() const { return rowView(kRingRow); }
 
   StampedIntensityPointcloud operator+(const StampedIntensityPointcloud& other) const = delete;
   uint64_t stamp;

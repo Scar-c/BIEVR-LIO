@@ -59,6 +59,21 @@ struct IntensityProcessorConfig {
 
   double raw_intensity_scale = 1.0;  // raw intensity scaling before projection
   bool use_ouster_lut = false;       // whether a factory point->pixel LUT is used
+
+  // Round-10: ENWIDE Ouster (OS0-128) factory-calibrated projection. Loaded by
+  // config_loader.h from the official os_enwide.json (converted to the committed
+  // YAML metadata file config/ouster/enwide_metadata.yaml; see provenance).
+  // projection must be "ouster_lut" for these to take effect.
+  std::string ouster_metadata_path = "";  // official os_enwide metadata (YAML)
+  std::vector<double> ouster_beam_altitude_angles;  // [deg], descending (beam 0..127)
+  std::vector<double> ouster_beam_azimuth_angles;   // [deg]
+  std::vector<int> ouster_pixel_shift_by_row;       // 128 entries
+  double ouster_beam_offset_m = 0.02767;            // lidar_origin_to_beam_origin_mm * 1e-3
+  int ouster_u_shift = 0;                           // ENWIDE official image/u_shift = 0
+  double ouster_intensity_scale = 0.25;             // COIN-LIO image/intensity_scale
+  bool sparse_brightness = true;                    // true = masked sparse window (Avia);
+                                                    // false = full-window box incl. empty
+                                                    // pixels (COIN-LIO Ouster cv::blur)
 };
 
 // Per-pixel result of the projection of a single scan.
@@ -121,14 +136,23 @@ class IntensityProcessor {
 
   // Projects + normalizes and returns the per-point filtered intensities (see
   // IntensityProcessingResult). Debug bypass when config_.enabled == false.
+  // `rings` (optional, index-aligned): Ouster ring/beam index per point. When
+  // projection == "ouster_lut" and rings is provided, the intensity image is
+  // built ring-based (row = ring, col = geometric azimuth column), matching the
+  // COIN-LIO dense-image construction (organized row == ring on the Ouster
+  // driver); otherwise the geometric elevation-LUT projector is used.
   IntensityProcessingResult process(const Pointcloud& points_L,
-                                    const IntensityView& raw_intensity);
+                                    const IntensityView& raw_intensity,
+                                    const IntensityView* rings = nullptr);
 
   // Point -> image pixel projection (raw, unclamped pixel). Returns false only
   // for non-finite or zero-range points. The returned (u, v) may lie outside
   // [0,W)x[0,H); clampPixel() (called by process/project) clamps it into the
   // image and counts boundary adjustments, so a sensor-FOV / image-size mismatch
-  // shows up in the diagnostics instead of dropping points.
+  // shows up in the diagnostics instead of dropping points. When projection ==
+  // "ouster_lut" this is the COIN-LIO factory-calibrated Ouster projector
+  // (beam-offset spherical model + beam-altitude lookup, u_shift applied); it
+  // returns false for points outside the beam vertical FOV (no clamping needed).
   bool projectPoint(const Point& p, int& u, int& v) const;
 
   // Exposed for unit testing / debugging: project + normalize without writeback.
@@ -142,8 +166,25 @@ class IntensityProcessor {
                                  const Eigen::MatrixXi& mask) const;
 
  private:
+  // COIN-LIO factory-calibrated Ouster projector (projectPoint port). Returns
+  // false for points outside the beam vertical FOV (the LUT rows bound the image
+  // exactly, so vertical clamping is never needed).
+  bool projectPointOuster(const Point& p, int& u, int& v) const;
+
+  // Geometric azimuth column only (COIN-LIO projectPoint u part). Used for the
+  // ring-based Ouster image construction (row = ring).
+  bool projectPointOusterCol(const Point& p, int& u) const;
+
   // Sparse box-average brightness I_B = sum(M*I) / max(sum(M), 1).
   Eigen::MatrixXd brightnessImage(const ProjectedIntensityImage& image) const;
+
+  // Full-window box average over ALL pixels (including empty/zero), matching the
+  // COIN-LIO Ouster cv::blur brightness (used when sparse_brightness == false).
+  Eigen::MatrixXd brightnessImageFull(const ProjectedIntensityImage& image) const;
+
+  // COIN-LIO official ENWIDE line-artifact removal (vertical high-pass then
+  // horizontal low-pass FIR, official config/line_removal.yaml coefficients).
+  void removeLinesOuster(Eigen::MatrixXf& image) const;
 
   // Clamps a raw projected pixel into the image and reports how it was adjusted
   // as a bitmask: 1 = horizontal (u), 2 = vertical top (v<0), 4 = vertical
