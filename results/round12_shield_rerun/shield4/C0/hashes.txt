@@ -1,0 +1,3 @@
+trajectory: 1ec4403382b69b5ddcdd00c6b0ebc9c45ab91d3cc19ef0b6b43010e6f1b710de
+photo:      5baa3d589c1cc098a6cdd5464a4ab19542e04c8d6a08abced2192ed7ac74b512
+config norm:df72c4415068e97ad0e3d4d90dd8cb6ee8968336e979ea65b8d7bbc3bf91fcfe

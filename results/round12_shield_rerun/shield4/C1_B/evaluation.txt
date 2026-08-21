@@ -1,0 +1,33 @@
+--------------------------------------------------------------------------------
+Loaded 3401 stamps and poses from: /tmp/opencode/geode_r12/eval/trajectory.txt
+Loaded 911 stamps and poses from: /home/lc/algorithm_versa/bag/GEODE/Shield_tunnel4.txt
+--------------------------------------------------------------------------------
+Synchronizing trajectories...
+Found 901 of max. 911 possible matching timestamps between...
+	/tmp/opencode/geode_r12/eval/trajectory.txt
+and:	/home/lc/algorithm_versa/bag/GEODE/Shield_tunnel4.txt
+..with max. time diff.: 0.1 (s) and time offset: 0.0 (s).
+--------------------------------------------------------------------------------
+Aligning using Umeyama's method...
+Rotation of alignment:
+[[-0.13524819  0.99020682  0.03461753]
+ [-0.9831226  -0.13846096  0.11957643]
+ [ 0.12319858 -0.01786078  0.9922213 ]]
+Translation of alignment:
+[-1848.01905196  1259.147099     -96.96475656]
+Scale correction: 1.0
+--------------------------------------------------------------------------------
+Compared 901 absolute pose pairs.
+Calculating APE for translation part pose relation...
+--------------------------------------------------------------------------------
+APE w.r.t. translation part (m)
+(with SE(3) Umeyama alignment)
+
+       max	3.177113
+      mean	1.987140
+    median	2.034144
+       min	0.330549
+      rmse	2.048262
+       sse	3780.034243
+       std	0.496639
+

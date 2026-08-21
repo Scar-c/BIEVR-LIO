@@ -1,0 +1,13 @@
+=== shield5 C0 : 2026年 08月 21日 星期五 16:59:21 CST ===
+hostname: robot
+HEAD: 04717fde206216caf5af8f0df458eb7df1b4d9ab
+binary: 5bc5a9c862ad403f6f17577e610725beda7fca1ccacf2017fe9cd3760260993c
+bag: /home/lc/algorithm_versa/bag/GEODE/Shield_tunnel5_gamma.bag
+--- load ---
+ 16:59:21 up 21:34,  1 user,  load average: 6.13, 7.06, 6.45
+--- mem ---
+              总计         已用        空闲      共享    缓冲/缓存    可用
+内存：        31Gi       9.0Gi       3.1Gi        72Mi        18Gi        21Gi
+交换：       2.0Gi       1.5Gi       517Mi
+--- process_bag ---
+none

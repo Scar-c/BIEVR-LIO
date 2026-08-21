@@ -1,0 +1,90 @@
+# COIN-BIEVR algorithm config preset - EXPERIMENTAL Livox Avia (GEODE).
+#
+# Round 4 preprocessing validation. This is a COMPLETE algorithm config (same
+# layout as params_coin_bievr.yaml / params.yaml) usable directly via
+#   roslaunch bievr_lio_ros process_bag.launch \
+#       sensor_config:=gamma params:=params_coin_bievr_avia rosbag:=/path/to/segment.bag
+#
+# Round-4 rules (do NOT tune photometric_scale):
+#   - intensity.optimization.enabled = false  -> photometric residual OFF;
+#     the trajectory stays geometry-BIEVR while intensity preprocessing / map /
+#     sampling diagnostics still run (isolation experiment).
+#   - vertical_fov_deg = 77.2 is the Livox Avia MANUFACTURER FOV (horizontal
+#     70.4 deg, vertical 77.2 deg). It is NOT a COIN-BIEVR supplement value.
+#   - brightness window 41x7 is an EXPERIMENTAL starting point taken from the
+#     public COIN-LIO configuration, NOT the official COIN-BIEVR value.
+#   - image_width/height 1024x64 remain experimental / TBD (the supplement does
+#     not report irregular-LiDAR image geometry).
+
+map:
+  pixel_size_m: 0.05 # Pixel side length [m]
+  voxel_size_m: 0.5 # Voxel side length [m]
+  normal_tolerance_deg: 3 # Normal change threshold to trigger reprojection of voxel image [°]
+  smooth: True # Apply smoothing to the voxel image
+  weighted: True # Weighted pixel update
+  max_size: 1500000 # Maximum number of voxels to keep in the map
+  frame: "odom"
+
+preprocess:
+  downsample_resolution_m: 0.1 # Downsample points to this resolution [m]. In case of informed sampling, this
+  # corresponds to the high resolution voxels
+  informed_sampling: True
+
+optimization:
+  huber_delta: 0.1 # Huber norm threshold
+
+intensity:
+  enabled: True # Master switch.
+
+  preprocessing:
+    enabled: True
+    projection: "spherical" # "spherical" (Eq. 1); "ouster_lut" needs a factory LUT
+    image_width: 1024 # experimental / TBD (supplement does not report irregular-LiDAR geometry)
+    image_height: 64 # experimental / TBD
+    vertical_fov_deg: 77.2 # Livox Avia manufacturer FOV.
+    # The exact COIN-BIEVR preprocessing parameter is not reported.
+    brightness_window_u: 41 # Experimental starting point from the public COIN-LIO
+    # configuration. NOT reported as the official COIN-BIEVR value.
+    brightness_window_v: 7 # ditto
+    normalization_scale: 140.0 # s in I_F = s*I/(I_B+1); keep 140 this round
+    remove_lines: False # Ouster line-artifact removal (not used for Livox)
+    gaussian_blur: False
+    raw_intensity_scale: 1.0 # Avia first round: observe raw range before scaling
+    use_ouster_lut: False
+
+  sampling:
+    enabled: True
+    num_voxels: 100 # N_intensity_voxel (paper)
+    downsample_resolution_m: 0.1 # intensity point downsampling (paper)
+    weak_eigen_ratio: 10.0 # eta switch 10*lambda1 > lambda2 (paper)
+    normalize_eta: True # TBD (paper does not specify)
+    score_mode: "abs_components" # Eq.8 sign handling; default abs_components (see code)
+
+  optimization:
+    enabled: True
+    photometric_scale: 0.001
+    # uses explicit per-run overrides; do NOT treat this value as calibrated.
+    shadow_diagnostics: False
+    # diagnostics without merging into the LM (never changes the trajectory).
+    # Engineering safeguard / TBD, not a paper parameter.
+    photometric_warmup_s: 10.0 # Photo residual enters the LM only after Running
+    # has lasted this long. Engineering safeguard / TBD, not a paper parameter.
+
+imu:
+    window_s: 10 # Time window for the inertial optimization [s]
+    t_init: 0.2 # Time to initialize bias and gravity [s]
+    frame: "imu"
+
+debug:
+  publish_all_clouds: False # Publish all clouds (fine, coarse, deskewed)
+  timing: True
+  log: False
+  dashboard: False
+  dashboard_ascii_path: "" # ASCII art for the dashboard. Empty = bievr_ascii.txt next to the config.
+  trajectory_path: "/home/lc/algorithm_versa/src/BIEVR-LIO/results/round12_shield_rerun/shield5/C1_A/trajectory.tum"
+  intensity_diagnostics_path: "/home/lc/algorithm_versa/src/BIEVR-LIO/results/round12_shield_rerun/shield5/C1_A/intensity.csv"
+  photo_diagnostics_path: "/home/lc/algorithm_versa/src/BIEVR-LIO/results/round12_shield_rerun/shield5/C1_A/photo.csv"
+  robust_shadow_scan_path: "/home/lc/algorithm_versa/src/BIEVR-LIO/results/round12_shield_rerun/shield5/C1_A/robust_shadow_scan.csv"
+  # Empty = disabled. Only enabled for round-4 validation runs.
+
+max_num_threads: 0 # 0 = automatic, >0 = number of threads to use for parallel processing
