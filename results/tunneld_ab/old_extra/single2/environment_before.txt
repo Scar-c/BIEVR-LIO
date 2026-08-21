@@ -1,0 +1,11 @@
+=== single2 : 2026年 08月 21日 星期五 14:44:35 CST ===
+hostname: robot
+nproc: 32
+--- uptime ---
+ 14:44:35 up 19:19,  1 user,  load average: 1.50, 2.23, 2.82
+--- memory ---
+              总计         已用        空闲      共享    缓冲/缓存    可用
+内存：        31Gi       9.0Gi       2.2Gi        77Mi        19Gi        21Gi
+交换：       2.0Gi       1.1Gi       948Mi
+--- running ---
+(none)

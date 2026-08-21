@@ -1,0 +1,3 @@
+8649eef5a50bea9f96507505ac9c5a46b7624f49213f41b95912016abca5ca6f  /home/lc/algorithm_versa/src/BIEVR-LIO/results/round10_6_manual_coldcache/run1/trajectory.tum
+3e62f185830dc80ea1e43198986425a3ad3f5e264f02ab0dc6a07a46fd7ae7a5  /home/lc/algorithm_versa/src/BIEVR-LIO/results/round10_6_manual_coldcache/run1/photo.csv
+c6977878d6d974ff975570702d753f056064d941249a6fb6ec9694684b96f176  /home/lc/algorithm_versa/src/BIEVR-LIO/results/round10_6_manual_coldcache/run1/config_used.yaml
