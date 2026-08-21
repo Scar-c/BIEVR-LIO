@@ -489,6 +489,45 @@ Per round-10 rules this is the stopping point: no lambda/window/preprocessing tu
 no TunnelS / other ENWIDE / Newer College, no Ouster lambda/window tuning, no Eq.8 change,
 no near-range filtering. All parameter finalization deferred to the coordinator.
 
+## 7k. Round 10.5 (TunnelD determinism audit + Shield5 original-baseline parity audit)
+
+**Q1 (TunnelD C1 nondeterminism): CONFIRMED, and it is parallel-execution nondeterminism.**
+Three clean sequential runs of TunnelD C1 (byte-identical config, SHA256
+be7d3e41..., idle machine, environment recorded, one run at a time) give:
+APE RMSE 0.472 / 91.419 / 399.106 m (one sub-meter, two catastrophic divergences;
+trajectory SHA all differ). Classification: NONDETERMINISM_BLOCKER. Phase A2
+(single-thread via max_num_threads=1, no code change): two runs are BITWISE
+IDENTICAL (trajectory SHA 4efd2d4f..., APE 344.97 m, diverged) ->
+PARALLEL_NONDETERMINISM_CONFIRMED: the multi-threaded photometric pipeline
+(parallel intensity preprocessing / intensity-map accumulation / sampling) is
+run-to-run nondeterministic (parallel order / shared-state race), and on the
+fully-degenerate TunnelD this is amplified into wildly different outcomes.
+The deterministic single-thread outcome ALSO diverges (345 m). The earlier
+0.596 m (contended run) is a historical anomaly, NOT authoritative; it was
+verified to have run concurrently with a Shield bag (launch/timing records:
+TunnelD C1 12:52-12:57 overlapped shield1 B0 rerun 12:52-12:55).
+Authoritative TunnelD C1 APE: DEFERRED (no stable median exists).
+
+**Q2 (Shield5 baseline divergence): CURRENT_BRANCH_BASELINE_REGRESSION_CONFIRMED.**
+Built the ORIGINAL public BIEVR executable (worktree
+/home/lc/algorithm_versa/src/BIEVR-LIO-original-21121698 at SHA 21121698, clean;
+independent build /tmp/opencode/original_ws, no compatibility patches, 0 warnings;
+executable SHA256 f6c608669a5b986307c9105e84a3941c4b12239e1d5ea859454e769250238e2a)
+and ran Shield5 with the original config (params.yaml SHA256 315ccdb2..., only the
+trajectory_path I/O line added). Original O-B0: APE RMSE 2.04 m (mean 1.95, median
+2.09, max 2.82; 2514 poses; trajectory returns to start - loop tracked) -> STABLE.
+Current H-B0 (886e2f3, intensity=false): APE 3305 m. The two trajectories are
+IDENTICAL for the first ~130 s (checkpoint positions match; pairwise trans P50
+0.038 m) then H-B0 diverges at the sequence turn-around while O-B0 recovers.
+=> The coin_bievr branch introduced a regression in the intensity=false geometry
+path that triggers ~130 s into Shield5. Next round: git bisect / code-diff over
+the coin_bievr geometry-path changes. Paper's Shield5 BIEVR 0.146 m is not
+reproduced even by the original binary (2.04 m), so part of the discrepancy is
+public-commit-vs-paper/eval differences; the divergence itself is a branch regression.
+
+Per round-10.5 rules: stopped after the audit; no algorithm tuning, no bisect this
+round, no further sequences. Both findings deferred to the coordinator.
+
 ## 3. Per-commit Changed Files
 
 **1. `460a04a` refactor(map): MapPoint**
