@@ -182,15 +182,18 @@ IntensitySampleSet sampleIntensityPoints(const BIEVRMap& map, const Pointcloud& 
   if (!config.enabled || undistorted.empty()) return result;
 
   // Per-point world position + hash (single pass over the undistorted cloud).
+  // observed_flag is byte-addressable storage (NOT std::vector<bool>): the
+  // parallel workers write logically disjoint indices, but the bit-packed proxy
+  // would perform read-modify-write on shared storage words (data race / UB).
   std::vector<VoxelHashIdx> entries(undistorted.size());
-  std::vector<bool> observed_flag(undistorted.size(), false);
+  std::vector<uint8_t> observed_flag(undistorted.size(), 0u);
   tbb::parallel_for(tbb::blocked_range<size_t>(0, undistorted.size()),
                     [&](const tbb::blocked_range<size_t>& r) {
                       for (size_t i = r.begin(); i != r.end(); ++i) {
                         const Point p_W = T_W_I_prior * undistorted[i];
                         const size_t hash = map.hashIndex(p_W);
                         entries[i] = {hash, i};
-                        observed_flag[i] = map.getVoxel(hash) != nullptr;
+                        observed_flag[i] = map.getVoxel(hash) != nullptr ? 1u : 0u;
                       }
                     });
 
