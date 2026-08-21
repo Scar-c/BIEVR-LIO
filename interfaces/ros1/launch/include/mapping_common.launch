@@ -1,0 +1,26 @@
+<launch>
+  <!-- Internal shared include for the sensor-specific mapping launchers.
+       The node reads the YAML config-file paths from its command-line arguments
+       (not the ROS parameter server), so they are passed via args=. -->
+  <arg name="sensor_config_file"/>
+  <arg name="params_file"/>
+  <arg name="rviz" default="true"/>
+  <!-- Sensor preset default topics (the node subscribes to the topic names from
+       the sensor config, so topic overrides are implemented as ROS remaps with
+       the preset default as the 'from' side). -->
+  <arg name="lidar_default_topic"/>
+  <arg name="imu_default_topic"/>
+  <!-- Optional overrides; empty (default) = use the preset defaults. -->
+  <arg name="lidar_topic" default=""/>
+  <arg name="imu_topic" default=""/>
+
+  <node pkg="bievr_lio_ros" type="process_topics" name="bievr_lio_mapping_node" output="screen"
+        args="--sensor_config_file '$(arg sensor_config_file)' --params_file '$(arg params_file)'">
+    <remap if="$(eval arg('lidar_topic') != '')" from="$(arg lidar_default_topic)" to="$(arg lidar_topic)"/>
+    <remap if="$(eval arg('imu_topic') != '')" from="$(arg imu_default_topic)" to="$(arg imu_topic)"/>
+  </node>
+
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find bievr_lio_ros)/rviz/mapping.rviz"/>
+  </group>
+</launch>

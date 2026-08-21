@@ -1,0 +1,17 @@
+<launch>
+  <arg name="rviz" default="true"/>
+  <arg name="lidar_topic" default=""/>
+  <arg name="imu_topic" default=""/>
+
+  <include file="$(find bievr_lio_ros)/launch/include/mapping_common.launch">
+    <arg name="sensor_config_file"
+         value="$(find bievr_lio_ros)/../../config/sensor_configs/enwide.yaml"/>
+    <arg name="params_file"
+         value="$(find bievr_lio_ros)/../../config/params_coin_bievr_ouster_enwide.yaml"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="lidar_default_topic" value="/ouster/points"/>
+    <arg name="imu_default_topic" value="/ouster/imu"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+  </include>
+</launch>

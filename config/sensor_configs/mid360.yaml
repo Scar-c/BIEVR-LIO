@@ -1,0 +1,23 @@
+topics:
+  pointcloud: "/livox/lidar"
+  imu: "/livox/imu"
+
+# Livox Mid360 preset. Mid360 uses the SAME Livox gen1 CustomMsg parser as Avia
+# (shared implementation; sensor-specific preset). No dedicated validated
+# extrinsic / intensity preprocessing exists for Mid360 in this repo yet, so:
+#   USES_CURRENT_DEFAULT
+# - calibration below is the GEODE gamma-device (Livox Avia) extrinsic; it MUST
+#   be replaced with the actual Mid360-on-vehicle extrinsic before use.
+# - the algorithm config (mapping_mid360.launch) is the shared Livox/COIN config;
+#   intensity preprocessing (FOV/image/window) falls back to the current default
+#   (Avia-derived 77.2 deg / 1024x64 / 41x7) - NOT a validated Mid360 preset.
+#   point_filter_num stays at the default 1.
+calibration: # T_IMU_LIDAR (LiDAR -> IMU)  [USES_CURRENT_DEFAULT, NOT validated]
+  translation: [0.0, 0.0, 0.0]
+  rotation: [1, 0, 0,
+             0, 1, 0,
+             0, 0, 1]
+
+lidar:
+  min_range_m: 0.5
+  max_range_m: 100
