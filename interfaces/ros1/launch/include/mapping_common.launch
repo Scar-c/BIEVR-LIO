@@ -21,6 +21,6 @@
   </node>
 
   <group if="$(arg rviz)">
-    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find bievr_lio_ros)/rviz/mapping.rviz"/>
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find bievr_lio_ros)/rviz/config.rviz"/>
   </group>
 </launch>
