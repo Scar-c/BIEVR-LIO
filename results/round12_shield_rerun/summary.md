@@ -41,3 +41,22 @@ the expected quaternion dot-approximation of identical poses).
   Shield5 B0 = 2.04 m stable).
 - Shield4 old C1 1.7772 (pre-fix) is superseded by 2.0483 (post-fix): the race
   materially changed Shield4's photometric score.
+
+## FlatSurfacesS (added post-hoc to the Round12 post-fix matrix)
+
+Bag: /home/lc/algorithm_versa/bag/ENWIDE/flat_surfaces_smooth.bag (82 s, 821 frames,
+Avia/gamma), GT flat_surfaces_smooth.txt. Evaluator: evo_ape tum -a trans_part
+t_max_diff 0.1 offset 0 (Round8/9 semantics).
+
+| run | APE RMSE | mean/median/max | notes |
+|---|---:|---:|---|
+| B0 | 1.5232 | 1.37/1.29/3.48 | identical to R9 (geometry deterministic) |
+| C0 | 1.6547 | 1.54/1.56/3.21 | identical to R9 |
+| C1-A | 0.0595 | 0.051/0.049/0.29 | traj SHA 6920bc2b... |
+| C1-B | 0.0595 | 0.051/0.049/0.29 | traj+photo SHA equal -> gate PASS |
+
+- C1 determinism: PASS (bitwise).
+- Pre-fix R9 C1 was 0.0625 m; post-fix deterministic C1 = 0.0595 m (paper 0.064 m
+  reproduced, now deterministically).
+- Trend: CLEAR_IMPROVEMENT (C1 0.0595 vs B0 1.5232, ~96% better) - the FlatSurfaces
+  photometric rescue is CONFIRMED post-race-fix and deterministic.

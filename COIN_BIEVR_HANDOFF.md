@@ -610,6 +610,14 @@ strict sequential, official GEODE evaluator):
 - C0 vs B0 side effect: Shield1 +11.1% (PIPELINE_LARGE_SIDE_EFFECT), Shield4
   +7.9% (PIPELINE_SIDE_EFFECT), Shield5 B0 diverged / C0 stable.
 
+FlatSurfacesS post-fix rerun (added to the Round12 matrix; bag/ENWIDE/
+flat_surfaces_smooth.bag, 82 s, Avia/gamma, R8/9 evaluator):
+- B0 1.5232, C0 1.6547 (IDENTICAL to R9 - geometry baseline deterministic)
+- C1-A == C1-B bitwise: APE 0.0595 m (traj+photo SHA equal, gate PASS)
+- vs pre-fix R9 C1 0.0625 m: post-fix deterministic 0.0595 m -> the FlatSurfaces
+  photometric rescue is CONFIRMED and now deterministic (paper 0.064 m
+  reproduced, CLEAR_IMPROVEMENT ~96% vs B0).
+
 ## 3. Per-commit Changed Files
 
 **1. `460a04a` refactor(map): MapPoint**
