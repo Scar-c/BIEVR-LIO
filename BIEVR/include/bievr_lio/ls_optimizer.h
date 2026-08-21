@@ -122,6 +122,20 @@ struct PhotometricDiagnostics {
   double photo_near_fraction = 0.0;          // photo matches with range < 1.5 m
   double photo_near_r_p50 = 0.0, photo_near_r_p90 = 0.0;
   double photo_far_r_p50 = 0.0, photo_far_r_p90 = 0.0;
+  // Round-10: full near (<1.5 m) / far (>=1.5 m) photometric breakdown over the
+  // matched photo samples (diagnostic only, no filtering): residual, Huber
+  // inlier fraction, intensity-gradient magnitude and J norm percentiles, plus
+  // the near/total direct robustified photo-Hessian fraction at this lambda.
+  double photo_near_r_p95 = 0.0, photo_far_r_p95 = 0.0;
+  double photo_near_inlier_fraction = 0.0, photo_far_inlier_fraction = 0.0;
+  double photo_near_grad_p50 = 0.0, photo_near_grad_p90 = 0.0;
+  double photo_far_grad_p50 = 0.0, photo_far_grad_p90 = 0.0;
+  double photo_near_J_p50 = 0.0, photo_near_J_p90 = 0.0;
+  double photo_far_J_p50 = 0.0, photo_far_J_p90 = 0.0;
+  double photo_near_H_fraction = 0.0;  // H_photo_near / H_photo_total (direct)
+  // Round-10: fraction of the intensity SOURCE points (sampled intensity points,
+  // IMU frame) with range < 1.5 m. Filled by the pipeline.
+  double source_near_fraction = 0.0;
   // Round-8: geometry weak eigenvalues (lambda1<=lambda2<=lambda3) and the
   // two-weak-direction flag (10*lambda1 > lambda2), from the Eq.7 degeneracy
   // analysis. Filled by the pipeline (intensity_samples.weak_eigenvalues).

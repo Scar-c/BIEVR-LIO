@@ -614,28 +614,60 @@ void LsqRegistration::finalizePhotoDiagnostics(const Transform& T_W_L,
   // Round-8: near-range (< 1.5 m) photo match statistics (Avia near-range
   // intensity artifacts; diagnostic only, no filtering).
   {
-    std::vector<double> near_r, far_r;
-    size_t near_count = 0;
+    const double lambda = config_.photometric_scale;
+    const double delta = config_.huber_delta;
+    std::vector<double> near_r, far_r, near_grad, far_grad, near_j, far_j;
+    size_t near_count = 0, near_inlier = 0, far_inlier = 0;
+    double H_near = 0.0, H_total = 0.0;
     for (const auto& s : photo_samples_) {
+      const double rr = std::abs(s.r);
+      // Direct robustified Hessian contribution at this frame's lambda
+      // (identical to the Accumulator: r/lambda-scaled then Huber IRLS).
+      const double r_l = lambda * s.r;
+      const double w = std::abs(r_l) <= delta ? 1.0 : delta / std::abs(r_l);
+      const double h_near = w * lambda * lambda * s.J.squaredNorm();
+      H_total += h_near;
       if (s.p_j.norm() < 1.5) {
         ++near_count;
-        near_r.push_back(std::abs(s.r));
+        near_r.push_back(rr);
+        near_grad.push_back(s.grad_norm);
+        near_j.push_back(s.J.norm());
+        if (std::abs(r_l) <= delta) ++near_inlier;
+        H_near += h_near;
       } else {
-        far_r.push_back(std::abs(s.r));
+        far_r.push_back(rr);
+        far_grad.push_back(s.grad_norm);
+        far_j.push_back(s.J.norm());
+        if (std::abs(r_l) <= delta) ++far_inlier;
       }
     }
+    auto pctn = [](std::vector<double>& v, double q) {
+      std::sort(v.begin(), v.end());
+      return quantileSorted(v, q);
+    };
     d.photo_near_fraction =
         photo_samples_.empty() ? 0.0 : static_cast<double>(near_count) / photo_samples_.size();
-    if (!near_r.empty()) {
-      std::sort(near_r.begin(), near_r.end());
-      d.photo_near_r_p50 = quantileSorted(near_r, 0.50);
-      d.photo_near_r_p90 = quantileSorted(near_r, 0.90);
-    }
-    if (!far_r.empty()) {
-      std::sort(far_r.begin(), far_r.end());
-      d.photo_far_r_p50 = quantileSorted(far_r, 0.50);
-      d.photo_far_r_p90 = quantileSorted(far_r, 0.90);
-    }
+    d.photo_near_r_p50 = pctn(near_r, 0.50);
+    d.photo_near_r_p90 = pctn(near_r, 0.90);
+    d.photo_near_r_p95 = pctn(near_r, 0.95);
+    d.photo_far_r_p50 = pctn(far_r, 0.50);
+    d.photo_far_r_p90 = pctn(far_r, 0.90);
+    d.photo_far_r_p95 = pctn(far_r, 0.95);
+    d.photo_near_inlier_fraction =
+        near_count > 0 ? static_cast<double>(near_inlier) / near_count : 0.0;
+    d.photo_far_inlier_fraction =
+        (photo_samples_.size() - near_count) > 0
+            ? static_cast<double>(far_inlier) / (photo_samples_.size() - near_count)
+            : 0.0;
+    d.photo_near_grad_p50 = pctn(near_grad, 0.50);
+    d.photo_near_grad_p90 = pctn(near_grad, 0.90);
+    d.photo_far_grad_p50 = pctn(far_grad, 0.50);
+    d.photo_far_grad_p90 = pctn(far_grad, 0.90);
+    d.photo_near_J_p50 = pctn(near_j, 0.50);
+    d.photo_near_J_p90 = pctn(near_j, 0.90);
+    d.photo_far_J_p50 = pctn(far_j, 0.50);
+    d.photo_far_J_p90 = pctn(far_j, 0.90);
+    d.photo_near_H_fraction = H_total > 0.0 ? H_near / H_total : 0.0;
   }
 
   // Hessian / gradient norms. photo H/b are lambda^2-scaled (the Accumulator
