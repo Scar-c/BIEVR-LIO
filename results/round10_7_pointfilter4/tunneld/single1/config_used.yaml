@@ -1,0 +1,88 @@
+# COIN-BIEVR algorithm config preset - ENWIDE Ouster OS0-128 (Round-10-B).
+#
+# ENWIDE-specific Ouster intensity preprocessing restored from public COIN-LIO
+# files (ethz-asl/COIN-LIO commit 76729cc4feb3649cbd79d28f82d9f62a2c82889b):
+#   - projection: ouster_lut (factory-calibrated os_enwide.json -> metadata
+#     config/ouster/enwide_metadata.yaml; official SHA256 618374db...b3b3e)
+#   - line-artifact removal: official line_removal.yaml coefficients
+#     (SHA256 db0be90e...a06ca7f), image/line_removal = true
+#   - image/u_shift = 0 (ENWIDE official)
+#   - image/intensity_scale = 0.25, image/window = [41, 7], brightness scale 140
+#   - full-window brightness box (COIN-LIO cv::blur semantics; sparse_brightness
+#     false), gaussian_blur on
+#
+# Algorithm parameters remain identical to the fixed COIN-BIEVR reproduction:
+#   photometric_scale = 0.001, Huber 0.1, top100, Eq.7/8, map 0.5 m,
+#   voxel map pixel 0.05 m, photo warmup 10 s, map maturity 1.0, LM unchanged.
+# Per the paper only the sensor-specific intensity preprocessing may differ.
+
+map:
+  pixel_size_m: 0.05
+  voxel_size_m: 0.5
+  normal_tolerance_deg: 3
+  smooth: True
+  weighted: True
+  max_size: 1500000
+  frame: "odom"
+
+preprocess:
+  downsample_resolution_m: 0.1
+  informed_sampling: True
+  point_filter_num: 4 # COIN-LIO mapping/point_filter_num (keep every 5th point)
+
+optimization:
+  huber_delta: 0.1
+
+intensity:
+  enabled: True
+
+  preprocessing:
+    enabled: True
+    projection: "ouster_lut" # factory-calibrated Ouster lookup projector (COIN-LIO)
+    image_width: 1024 # from official os_enwide.json columns_per_frame
+    image_height: 128 # from official os_enwide.json pixels_per_column
+    vertical_fov_deg: 90.0 # unused for ouster_lut (row from beam-altitude LUT)
+    brightness_window_u: 41 # COIN-LIO ENWIDE image/window [41, 7]
+    brightness_window_v: 7
+    normalization_scale: 140.0 # COIN-LIO filterBrightness constant
+    remove_lines: True # official line_removal.yaml (vertical HPF + horizontal LPF)
+    gaussian_blur: True # COIN-LIO image/blur
+    raw_intensity_scale: 1.0
+    use_ouster_lut: True
+    # Official os_enwide.json metadata (converted to YAML; SHA256 in the file).
+    ouster_metadata_path: "/home/lc/algorithm_versa/src/BIEVR-LIO/config/ouster/enwide_metadata.yaml"
+    ouster_u_shift: 0 # ENWIDE official image/u_shift = 0
+    ouster_intensity_scale: 0.25 # COIN-LIO image/intensity_scale (reflectivity off)
+    sparse_brightness: False # COIN-LIO cv::blur full-window box (zeros included)
+
+  sampling:
+    enabled: True
+    num_voxels: 100
+    downsample_resolution_m: 0.1
+    weak_eigen_ratio: 10.0
+    normalize_eta: True
+    score_mode: "abs_components"
+
+  optimization:
+    enabled: True
+    photometric_scale: 0.001 # PROVISIONAL_FIXED_LAMBDA (round-10, same as Avia)
+    shadow_diagnostics: False
+    photometric_warmup_s: 10.0
+
+imu:
+    window_s: 10
+    t_init: 0.2
+    frame: "imu"
+
+debug:
+  publish_all_clouds: False
+  timing: True
+  log: False
+  dashboard: False
+  dashboard_ascii_path: ""
+  trajectory_path: "results/round10_7_pointfilter4/tunneld/single1/trajectory.tum"
+  intensity_diagnostics_path: "results/round10_7_pointfilter4/tunneld/single1/intensity.csv"
+  photo_diagnostics_path: "results/round10_7_pointfilter4/tunneld/single1/photo.csv"
+  robust_shadow_scan_path: "results/round10_7_pointfilter4/tunneld/single1/robust_shadow_scan.csv"
+
+max_num_threads: 1
