@@ -557,6 +557,31 @@ sync, one of three runs diverges catastrophically. The pattern is bimodal
 Authoritative TunnelD C1 APE: DEFERRED. Next step: source-level parallel
 race/order investigation (not done this round per protocol).
 
+## 7m. Round 11 (P0 std::vector<bool> race fix — TunnelD parallel determinism)
+
+**ROOT_CAUSE_CONFIRMED.** `sampleIntensityPoints()` wrote a `std::vector<bool>
+observed_flag` from disjoint `tbb::parallel_for` indices; the bit-packed proxy
+performs read-modify-write on shared storage words (data race / UB). Replaced
+with byte-addressable `std::vector<uint8_t>` (0u/1u) — storage-only change, no
+logic/index/ordering change. New regression test `test_intensity_sampling_parity`
+(serial via tbb::global_control(1) == default parallel; fixture with 4 observed
++ 3 unobserved voxels mixing storage-word indices).
+
+TunnelD pf4 (lambda=0.001, point_filter_num=4, max_num_threads=0) ×3 after fix:
+- run1/run2/run3 trajectory SHA: a8ea08e0... (ALL IDENTICAL, bitwise)
+- identical to the single-thread reference (a8ea08e0...; pairwise max trans diff
+  0.000e+00 m; APE diff 0.000000)
+- APE RMSE 0.5854 m for all three (mean 0.5435, median 0.6224, max 0.8825)
+- no 34-37 s catastrophic bifurcation (none of the runs diverges)
+
+=> Parallel determinism: PASS (BITWISE_DETERMINISTIC). Serial-parallel parity:
+PASS. The vector<bool> race was the PRIMARY parallel nondeterminism root cause
+(not page cache, not CPU contention, not the geometry stride). Also corrected the
+point_filter_num doc error ("1 of every 5" -> stride N: indices 0,4,8,... = 1 of
+every 4 points, ratio 0.25). Remaining known-but-not-fixed parallel risks (only
+recorded): selection/downsample comparator total ordering, unordered_map
+iteration, map-integration ordering, TBB reduction internals.
+
 ## 3. Per-commit Changed Files
 
 **1. `460a04a` refactor(map): MapPoint**
