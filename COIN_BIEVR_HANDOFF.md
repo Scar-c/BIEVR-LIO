@@ -424,50 +424,57 @@ lambda selection (0.001 vs 0.003) and next steps are deferred to the coordinator
 
 ## 7j. Round 10 (Avia cross-sequence generalization + ENWIDE Ouster TunnelD)
 
+**IMPORTANT CORRECTION (sequential clean re-run):** some earlier Round-10 runs were executed
+concurrently with other runs, and CPU contention materially changes the odometry (IMU
+propagation between LiDAR frames depends on frame timing). In particular TunnelD C1 gave
+0.596 m under contention and 7.26 m when re-run strictly sequentially; Shield4 C1 changed
+1.657 -> 1.777. ALL Round-10 numbers below are from the strict sequential re-run (one bag at
+a time, nothing else running) and are authoritative. Shield5 B0's divergence is NOT contention:
+it reproduces identically in the clean sequential run.
+
 **Round10-A — GEODE/Livox Avia fixed-parameter generalization (lambda=0.001, Avia
 preprocessing/map/sampling frozen, full bags from t0, official GEODE evaluator:
 gamma2GT_leica.py + rmse.py semantics, GEODE commit c6e9306).**
 
 | Sequence | B0 | C0 | C1 λ=0.001 | Paper BIEVR | Paper COIN | Trend |
 |---|---:|---:|---:|---:|---:|---|
-| Shield1 | 0.395 | 0.438 | 0.413 | 0.256 | 0.220 | NEUTRAL (C1 -4.6% vs B0) |
-| Shield4 | 1.887 | 2.036 | 1.657 | 0.275 | 0.245 | CLEAR_TREND_MATCH (C1 -12.2%) |
-| Shield5 | 3305 (DIVERGED) | 2.016 | 2.030 | 0.146 | 0.219 | BETTER_THAN_PAPER_TREND (B0 diverged) |
+| Shield1 | 0.395 | 0.438 | 0.417 | 0.256 | 0.220 | NEUTRAL (C1 -5.6% vs B0) |
+| Shield4 | 1.887 | 2.036 | 1.777 | 0.275 | 0.245 | CLEAR_TREND_MATCH (C1 -5.8%) |
+| Shield5 | 3305 (DIVERGED) | 2.016 | 2.037 | 0.146 | 0.219 | BETTER_THAN_PAPER_TREND (B0 diverges) |
 | FlatS (R9) | 1.5232 | 1.6547 | 0.0625 | FAIL | 0.064 | MATCH |
 
-- Shield4 reproduces the paper's "photo improves" trend (-12.2%); Shield1 is NEUTRAL
-  (slight degradation, paper predicts improvement); Shield5 B0 baseline DIVERGES
-  (paper BIEVR 0.146 not reproduced), C1 is stable -> BETTER_THAN_PAPER_TREND.
-- Absolute ATE is systematically higher than the paper on all Shield sequences (e.g.
-  Shield4 C1 1.657 vs paper 0.245); only the Shield4 relative trend matches.
-- Near-range exposure is ~0 for all Shields (no intensity points <1.5 m), so the paper's
-  Avia near-range degradation story cannot be observed here.
+- Shield4 reproduces the paper's "photo improves" trend (-5.8%); Shield1 is NEUTRAL (slight
+  degradation, paper predicts improvement); Shield5 B0 baseline DIVERGES deterministically
+  (paper BIEVR 0.146 not reproduced with the faithful original BIEVR config - params.yaml ==
+  baseline), C1 is stable -> BETTER_THAN_PAPER_TREND.
+- Absolute ATE is systematically higher than the paper on all Shield sequences (e.g. Shield4
+  C1 1.777 vs paper 0.245); only the Shield4 relative trend matches.
+- Near-range exposure is ~0 for all Shields (no intensity points <1.5 m), so the paper's Avia
+  near-range degradation story cannot be observed here.
 
 **Round10-B — ENWIDE Ouster OS0-128 preprocessing + TunnelD degenerate stress test.**
 
-Implemented (faithful COIN-LIO port, commit 76729cc4): Ouster metadata loader
-(official os_enwide.json -> config/ouster/enwide_metadata.yaml, SHA256 618374db...b3b3e),
-ring-carrying through the point cloud (6th channel), ring-based intensity image
-construction (row = ring, col = geometric azimuth; organized row == ring verified 100%),
-official line_removal.yaml FIR coefficients (SHA256 db0be90e...a06ca7f), COIN-LIO
-full-window brightness (sparse_brightness false), u_shift 0, intensity_scale 0.25.
+Implemented (faithful COIN-LIO port, commit 76729cc4): Ouster metadata loader (official
+os_enwide.json -> config/ouster/enwide_metadata.yaml, SHA256 618374db...b3b3e), ring-carrying
+through the point cloud (6th channel), ring-based intensity image construction (row = ring,
+col = geometric azimuth; organized row == ring verified 100%), official line_removal.yaml FIR
+(SHA256 db0be90e...a06ca7f), COIN-LIO full-window brightness, u_shift 0, intensity_scale 0.25.
 New config config/params_coin_bievr_ouster_enwide.yaml (algorithm params identical to the
-fixed reproduction; only sensor-specific intensity preprocessing differs). Avia config/
-behavior untouched.
+fixed reproduction). Avia config/behavior untouched.
 
-Ouster readiness gates: O1 (metadata provenance) PASS, O2 (1024x128) PASS,
-O3 (projection uniqueness P50 0.9995) PASS, O4 (vertical clamp 0) PASS,
-O5 (row=ring, organized row==ring 100%) PASS, O6 (independent COIN-LIO oracle) NOT run.
--> OUSTER_READY_WITH_LIMITATION (implementation-based reproduction; not exact preprocessing parity).
+Ouster readiness gates: O1 (metadata provenance) PASS, O2 (1024x128) PASS, O3 (projection
+uniqueness P50 0.9995) PASS, O4 (vertical clamp 0) PASS, O5 (row=ring, organized row==ring
+100%) PASS, O6 (independent COIN-LIO oracle) NOT run. -> OUSTER_READY_WITH_LIMITATION.
 
-TunnelD (119 s, 1189 frames, /ouster/points + /ouster/imu):
+TunnelD (119 s, 1189 frames) SEQUENTIAL:
 - O-B0 (BIEVR): APE RMSE **63.65 m** -> FAIL (paper BIEVR FAIL reproduced).
 - O-C0 (photo OFF): 85.43 m -> FAIL (intensity-pipeline side effect, worse than B0).
-- O-C1 (photo ON, lambda=0.001): APE RMSE **0.596 m** -> STRONG_RESCUE, no divergence.
-- TunnelD is a ONE-weak-direction (longitudinal) tunnel: two-weak fraction 0.172;
-  directional q_photo/q_geo ratio along the weak direction P50 = 1.68 (photo Hessian
-  exceeds geometry there) - the rescue mechanism.
-- Classification: OUSTER_RESCUE_BUT_NUMERIC_MISMATCH (|0.596 - 0.369| = 0.227 > 0.10).
+- O-C1 (photo ON, lambda=0.001): APE RMSE **7.26 m** -> bounded, no divergence, ~9x
+  improvement over B0 but APE > 1 m (does not meet OUSTER_STRONG_RESCUE < 1 m, not paper-close
+  to 0.369). TunnelD is one-weak-direction (longitudinal): two-weak fraction 0.197;
+  q_photo/q_geo along the weak direction P50 ~1.7 (photo supplies information where geometry
+  is weak) - the rescue mechanism.
+- Classification: PARTIAL_RESCUE (rescue real, sub-meter paper proximity not achieved).
 - C0 shadow serial-vs-production parity machine precision on Ouster too.
 
 Per round-10 rules this is the stopping point: no lambda/window/preprocessing tuning,
