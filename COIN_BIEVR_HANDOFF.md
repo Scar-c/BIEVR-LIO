@@ -528,6 +528,35 @@ public-commit-vs-paper/eval differences; the divergence itself is a branch regre
 Per round-10.5 rules: stopped after the audit; no algorithm tuning, no bisect this
 round, no further sequences. Both findings deferred to the coordinator.
 
+## 7l. Round 10.6 (TunnelD manual cold-cache repetition audit)
+
+Q: did the previous-run Linux page cache / shared output state cause the
+Round10.5 RUN1->RUN2->RUN3 spread (0.47/91/399)?
+
+Protocol: 3 runs of TunnelD C1, each manually invoked (not the round10.5 runner),
+fresh process, independent output directories (run1/run2/run3 under
+results/round10_6_manual_coldcache), hard process barrier (pgrep -x process_bag
+empty) before each, sync before each. Same BASE_CFG (SHA256 be7d3e41..., verified
+unchanged); normalized algorithm config (output paths excluded) identical across
+the three runs (SHA 461d8ea7..., zero diff).
+
+PROTOCOL DEVIATION: sudo drop_caches=3 was NOT executed (user decision - no sudo
+password). Only sync was performed, so the page cache was not actually dropped.
+
+Results: RUN1 APE 6.12 m (path 161.8 m), RUN2 APE 5.75 m (162.0 m), RUN3 APE
+159.92 m (575.6 m, diverged). Trajectory SHA all different. RUN1-RUN2 pairwise:
+trans P50 0.033 m / max 1.20 m, rot P50 0.032 deg / max 0.35 deg (close but not
+identical); RUN3 far (trans max ~377 m). APE spread 5.75 -> 159.9 m.
+
+Classification: COLD_CACHE_NONDETERMINISM_CONFIRMED (with the drop_caches
+deviation). Page-cache/output-state contamination alone does NOT explain the
+run-to-run variation: even with independent dirs + fresh processes + barriers +
+sync, one of three runs diverges catastrophically. The pattern is bimodal
+(bounded ~6 m basin vs diverged), consistent with Round10.5.
+
+Authoritative TunnelD C1 APE: DEFERRED. Next step: source-level parallel
+race/order investigation (not done this round per protocol).
+
 ## 3. Per-commit Changed Files
 
 **1. `460a04a` refactor(map): MapPoint**
