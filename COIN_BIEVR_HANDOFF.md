@@ -422,6 +422,58 @@ Per round-9 rules this is the stopping point: no lambda/window/preprocessing
 tuning, no further datasets, no Eq.7/8 audit changes (diagnostics only). Final
 lambda selection (0.001 vs 0.003) and next steps are deferred to the coordinator.
 
+## 7j. Round 10 (Avia cross-sequence generalization + ENWIDE Ouster TunnelD)
+
+**Round10-A — GEODE/Livox Avia fixed-parameter generalization (lambda=0.001, Avia
+preprocessing/map/sampling frozen, full bags from t0, official GEODE evaluator:
+gamma2GT_leica.py + rmse.py semantics, GEODE commit c6e9306).**
+
+| Sequence | B0 | C0 | C1 λ=0.001 | Paper BIEVR | Paper COIN | Trend |
+|---|---:|---:|---:|---:|---:|---|
+| Shield1 | 0.395 | 0.438 | 0.413 | 0.256 | 0.220 | NEUTRAL (C1 -4.6% vs B0) |
+| Shield4 | 1.887 | 2.036 | 1.657 | 0.275 | 0.245 | CLEAR_TREND_MATCH (C1 -12.2%) |
+| Shield5 | 3305 (DIVERGED) | 2.016 | 2.030 | 0.146 | 0.219 | BETTER_THAN_PAPER_TREND (B0 diverged) |
+| FlatS (R9) | 1.5232 | 1.6547 | 0.0625 | FAIL | 0.064 | MATCH |
+
+- Shield4 reproduces the paper's "photo improves" trend (-12.2%); Shield1 is NEUTRAL
+  (slight degradation, paper predicts improvement); Shield5 B0 baseline DIVERGES
+  (paper BIEVR 0.146 not reproduced), C1 is stable -> BETTER_THAN_PAPER_TREND.
+- Absolute ATE is systematically higher than the paper on all Shield sequences (e.g.
+  Shield4 C1 1.657 vs paper 0.245); only the Shield4 relative trend matches.
+- Near-range exposure is ~0 for all Shields (no intensity points <1.5 m), so the paper's
+  Avia near-range degradation story cannot be observed here.
+
+**Round10-B — ENWIDE Ouster OS0-128 preprocessing + TunnelD degenerate stress test.**
+
+Implemented (faithful COIN-LIO port, commit 76729cc4): Ouster metadata loader
+(official os_enwide.json -> config/ouster/enwide_metadata.yaml, SHA256 618374db...b3b3e),
+ring-carrying through the point cloud (6th channel), ring-based intensity image
+construction (row = ring, col = geometric azimuth; organized row == ring verified 100%),
+official line_removal.yaml FIR coefficients (SHA256 db0be90e...a06ca7f), COIN-LIO
+full-window brightness (sparse_brightness false), u_shift 0, intensity_scale 0.25.
+New config config/params_coin_bievr_ouster_enwide.yaml (algorithm params identical to the
+fixed reproduction; only sensor-specific intensity preprocessing differs). Avia config/
+behavior untouched.
+
+Ouster readiness gates: O1 (metadata provenance) PASS, O2 (1024x128) PASS,
+O3 (projection uniqueness P50 0.9995) PASS, O4 (vertical clamp 0) PASS,
+O5 (row=ring, organized row==ring 100%) PASS, O6 (independent COIN-LIO oracle) NOT run.
+-> OUSTER_READY_WITH_LIMITATION (implementation-based reproduction; not exact preprocessing parity).
+
+TunnelD (119 s, 1189 frames, /ouster/points + /ouster/imu):
+- O-B0 (BIEVR): APE RMSE **63.65 m** -> FAIL (paper BIEVR FAIL reproduced).
+- O-C0 (photo OFF): 85.43 m -> FAIL (intensity-pipeline side effect, worse than B0).
+- O-C1 (photo ON, lambda=0.001): APE RMSE **0.596 m** -> STRONG_RESCUE, no divergence.
+- TunnelD is a ONE-weak-direction (longitudinal) tunnel: two-weak fraction 0.172;
+  directional q_photo/q_geo ratio along the weak direction P50 = 1.68 (photo Hessian
+  exceeds geometry there) - the rescue mechanism.
+- Classification: OUSTER_RESCUE_BUT_NUMERIC_MISMATCH (|0.596 - 0.369| = 0.227 > 0.10).
+- C0 shadow serial-vs-production parity machine precision on Ouster too.
+
+Per round-10 rules this is the stopping point: no lambda/window/preprocessing tuning,
+no TunnelS / other ENWIDE / Newer College, no Ouster lambda/window tuning, no Eq.8 change,
+no near-range filtering. All parameter finalization deferred to the coordinator.
+
 ## 3. Per-commit Changed Files
 
 **1. `460a04a` refactor(map): MapPoint**
