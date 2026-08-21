@@ -121,3 +121,23 @@ HARD_CODED_NOT_EXPOSED (implemented but not configurable):
 The old `process_bag.launch` / `process_topics.launch`, all existing YAML files
 and the offline process_bag benchmark scripts are unchanged and continue to work.
 The new launchers are purely additive.
+## Troubleshooting
+
+Symptom: `Error in XmlRpcClient::writeRequest: write error (Connection refused).`
+repeated at launch while roscore appears alive.
+
+Cause observed: a long-lived roscore whose `rosmaster` accumulated stale node
+registrations (from force-killed nodes) and intermittently refused XMLRPC
+connections. Note that `kill <roscore-wrapper-pid>` alone does NOT stop the
+`rosmaster --core` child that actually owns port 11311.
+
+Fix:
+```bash
+pkill -9 -f "rosmaster --core"    # kill the real master process
+pkill -9 -f "/opt/ros/noetic/lib/rosout"
+pkill -9 -f "bin/roscore"
+roscore &                           # start ONE fresh master
+```
+Verify: `rosparam list` should show only /rosdistro, /rosversion and fresh
+/roslaunch/uris; the Connection refused errors disappear and all mapping_*.launch
+files load cleanly.
