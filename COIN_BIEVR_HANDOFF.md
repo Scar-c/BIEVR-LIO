@@ -427,10 +427,13 @@ lambda selection (0.001 vs 0.003) and next steps are deferred to the coordinator
 **IMPORTANT CORRECTION (sequential clean re-run):** some earlier Round-10 runs were executed
 concurrently with other runs, and CPU contention materially changes the odometry (IMU
 propagation between LiDAR frames depends on frame timing). In particular TunnelD C1 gave
-0.596 m under contention and 7.26 m when re-run strictly sequentially; Shield4 C1 changed
-1.657 -> 1.777. ALL Round-10 numbers below are from the strict sequential re-run (one bag at
-a time, nothing else running) and are authoritative. Shield5 B0's divergence is NOT contention:
-it reproduces identically in the clean sequential run.
+0.596 m under contention vs 7.26 m when re-run strictly sequentially; Shield4 C1 changed
+1.657 -> 1.777. ALL Round-10 Avia numbers below are from the strict sequential re-run (one
+bag at a time, nothing else running) and are authoritative. Shield5 B0's divergence is NOT
+contention: it reproduces identically in the clean sequential run. NOTE: for TunnelD C1 the
+sequential re-run alone is still not reproducible (see Round10-B below) - the photometric
+pipeline is run-to-run nondeterministic on that sequence (0.6-96 m across four identical
+config executions, one diverged).
 
 **Round10-A — GEODE/Livox Avia fixed-parameter generalization (lambda=0.001, Avia
 preprocessing/map/sampling frozen, full bags from t0, official GEODE evaluator:
@@ -466,16 +469,21 @@ Ouster readiness gates: O1 (metadata provenance) PASS, O2 (1024x128) PASS, O3 (p
 uniqueness P50 0.9995) PASS, O4 (vertical clamp 0) PASS, O5 (row=ring, organized row==ring
 100%) PASS, O6 (independent COIN-LIO oracle) NOT run. -> OUSTER_READY_WITH_LIMITATION.
 
-TunnelD (119 s, 1189 frames) SEQUENTIAL:
-- O-B0 (BIEVR): APE RMSE **63.65 m** -> FAIL (paper BIEVR FAIL reproduced).
-- O-C0 (photo OFF): 85.43 m -> FAIL (intensity-pipeline side effect, worse than B0).
-- O-C1 (photo ON, lambda=0.001): APE RMSE **7.26 m** -> bounded, no divergence, ~9x
-  improvement over B0 but APE > 1 m (does not meet OUSTER_STRONG_RESCUE < 1 m, not paper-close
-  to 0.369). TunnelD is one-weak-direction (longitudinal): two-weak fraction 0.197;
-  q_photo/q_geo along the weak direction P50 ~1.7 (photo supplies information where geometry
-  is weak) - the rescue mechanism.
-- Classification: PARTIAL_RESCUE (rescue real, sub-meter paper proximity not achieved).
+TunnelD (119 s, 1189 frames):
+- O-B0 (BIEVR): APE RMSE **63.65 m** (deterministic, x2) -> FAIL (paper BIEVR FAIL reproduced).
+- O-C0 (photo OFF): 85.43 m (deterministic, x2) -> FAIL (intensity-pipeline side effect).
+- O-C1 (photo ON, lambda=0.001): **NOT RUN-TO-RUN REPRODUCIBLE.** Four executions with the
+  SAME byte-identical config gave APE RMSE 0.596 / 7.26 / 11.13 / 96.45 m (one diverged,
+  path 394 m). B0/C0 geometry runs are deterministic; the photometric pipeline (parallel
+  intensity preprocessing / map accumulation / sampling) is run-to-run nondeterministic and
+  the fully-degenerate tunnel amplifies it. The earlier 0.596 m was a single favourable
+  execution; TunnelD photometric rescue is NOT RELIABLY REPRODUCED in this implementation.
+  Mechanism (photo Hessian exceeds geometry along the one-weak longitudinal direction,
+  q_photo/q_geo ~1.7) is real, but does not translate into a stable trajectory.
+- Classification: OUSTER_INCONCLUSIVE (run-to-run nondeterminism; 1 of 4 C1 runs diverged).
 - C0 shadow serial-vs-production parity machine precision on Ouster too.
+- This nondeterminism of the photometric path must be understood/fixed before TunnelD can
+  validate photometric rescue.
 
 Per round-10 rules this is the stopping point: no lambda/window/preprocessing tuning,
 no TunnelS / other ENWIDE / Newer College, no Ouster lambda/window tuning, no Eq.8 change,
