@@ -1,5 +1,6 @@
 <launch>
   <arg name="rviz" default="true"/>
+  <arg name="photo" default="true"/>
   <arg name="lidar_topic" default=""/>
   <arg name="imu_topic" default=""/>
 
@@ -7,7 +8,7 @@
     <arg name="sensor_config_file"
          value="$(find bievr_lio_ros)/../../config/sensor_configs/mid360.yaml"/>
     <arg name="params_file"
-         value="$(find bievr_lio_ros)/../../config/params_coin_bievr_avia.yaml"/>
+         value="$(eval find('bievr_lio_ros') + '/../../config/' + 'params_coin_bievr_avia' + ('' if arg('photo') else '_c0') + '.yaml')"/>
     <arg name="rviz" value="$(arg rviz)"/>
     <arg name="lidar_default_topic" value="/livox/lidar"/>
     <arg name="imu_default_topic" value="/livox/imu"/>

@@ -9,8 +9,19 @@ roslaunch bievr_lio_ros mapping_mid360.launch
 roslaunch bievr_lio_ros mapping_ouster.launch
 ```
 
+Photometric optimization switch (C1 default ON, provisional lambda 0.001):
+```bash
+roslaunch bievr_lio_ros mapping_ouster.launch photo:=false   # C0: photo OFF +
+                                                              # shadow diagnostics
+```
+
 Each launch selects the sensor preset AND its validated algorithm config, so the
-user never writes `sensor_config_file:=...` by hand. Optional topic override via
+user never writes `sensor_config_file:=...` by hand. The `photo` arg (default
+true) selects the C1 preset (`params_coin_bievr_{avia,ouster_enwide}.yaml`,
+intensity optimization ON, lambda 0.001) or the C0 preset
+(`params_coin_bievr_{avia,ouster_enwide}_c0.yaml`, photo OFF + shadow
+diagnostics ON); the C0 files are generated from the C1 files with only the
+enabled/shadow lines differing. Optional topic override via
 ROS remap:
 
 ```bash

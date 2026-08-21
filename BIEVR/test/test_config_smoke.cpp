@@ -99,8 +99,27 @@ int main() {
     if (ic.preprocessing.brightness_window_u != 41 || ic.preprocessing.brightness_window_v != 7) {
       return fail("avia preset brightness window must load 41x7 (getNested regression)");
     }
-    if (ic.optimization_enabled) {
-      return fail("avia preset must have intensity.optimization.enabled=false (round-4 isolation)");
+    // C1 default: photometric optimization ON with the provisional lambda 0.001.
+    if (!ic.optimization_enabled) {
+      return fail("avia preset must have intensity.optimization.enabled=true (C1 default)");
+    }
+    if (!near(ic.photometric_scale, 0.001)) {
+      return fail("avia preset intensity.optimization.photometric_scale must load 0.001");
+    }
+    // C0 preset: photo OFF + shadow diagnostics ON, everything else identical.
+    {
+      bievr::Config c0;
+      if (!bievr::loadConfigFromYaml({config_dir + "/params_coin_bievr_avia_c0.yaml", sensor_file},
+                                     c0)) {
+        return fail("params_coin_bievr_avia_c0.yaml failed to parse");
+      }
+      const auto& c0ic = c0.pipeline_config.intensity;
+      if (c0ic.optimization_enabled) {
+        return fail("avia C0 preset must have intensity.optimization.enabled=false");
+      }
+      if (!c0ic.shadow_diagnostics) {
+        return fail("avia C0 preset must have shadow_diagnostics=true");
+      }
     }
   }
 

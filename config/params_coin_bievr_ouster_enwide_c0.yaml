@@ -1,3 +1,6 @@
+# C0 PRESET (photo OFF) - generated from the C1 file params_coin_bievr_ouster_enwide.yaml
+# ONLY optimization.enabled (False) and shadow_diagnostics (True) differ;
+# all other lines (including photometric_scale) are byte-identical to the C1 preset.
 # COIN-BIEVR algorithm config preset - ENWIDE Ouster OS0-128 (Round-10-B).
 #
 # ENWIDE-specific Ouster intensity preprocessing restored from public COIN-LIO
@@ -66,11 +69,11 @@ intensity:
     score_mode: "abs_components"
 
   optimization:
-    enabled: True # C1 default: photometric residual ON (lambda below). The
+    enabled: False # C0 preset (photo OFF): photometric residual disabled.
     # benchmark C0 group (photo OFF + shadow diagnostics ON) uses the *_c0.yaml
     # preset selected by the mapping_*.launch photo:=false switch.
     photometric_scale: 0.001 # PROVISIONAL_FIXED_LAMBDA (round-10, same as Avia)
-    shadow_diagnostics: False # C0 shadow run (photo OFF + diagnostics), see *_c0.yaml
+    shadow_diagnostics: True # C0: compute photo residual/J/H/b diagnostics without merging
     photometric_warmup_s: 10.0
 
 imu:
