@@ -6,8 +6,8 @@ Implemented COIN-LIO's `mapping/point_filter_num` semantics for the Ouster group
 the UNDISTORTED cloud for the GEOMETRY registration + map-update path only. The
 intensity preprocessing and sampling keep the FULL cloud (matching COIN-LIO, which
 builds its intensity image from the full undistorted cloud). Set to 4 in
-config/params_coin_bievr_ouster_enwide.yaml (COIN-LIO ENWIDE value: 1 of every 5
-points).
+config/params_coin_bievr_ouster_enwide.yaml (COIN-LIO ENWIDE value: stride 4 ->
+retained indices 0,4,8,... = 1 of every 4 points, ratio 0.25).
 
 Algorithm math unchanged elsewhere. Avia configs untouched (default 1).
 
