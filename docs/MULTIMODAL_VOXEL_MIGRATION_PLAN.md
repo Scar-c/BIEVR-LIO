@@ -35,3 +35,24 @@ Regression gates (all phases):
   <= 1e-6 deg
 - Intensity OFF: BIEVR geometry path semantics preserved
 - Build: 23/23 tests PASS (update total if tests grow)
+
+## R1 implementation status (Phase 14, DONE)
+
+- Abstraction extracted: BIEVR/include/bievr_lio/point_voxel_association.h
+  (PointVoxelAssociation {hash, point_idx} + buildPointVoxelAssociations +
+  sortPointVoxelAssociations; PER_INDEX_EXCLUSIVE stage-1 writes; no
+  std::vector<bool>).
+- Callers migrated: sampleInformed (geometry), sampleIntensityPoints and
+  findObservedVoxels (intensity).
+- Caller DEFERRED: BIEVRMap::integratePoints (association carries MapPoint and
+  sorts by (hash, x-position) - different semantics; migrating would change
+  behavior, forbidden in R1).
+- Comparator semantics: unchanged ((hash, point_idx) preserved). Tie-breaks NOT
+  changed.
+- Tests: test_point_voxel_association (T1 serial==parallel, T2 old-vs-new
+  reference, T3 duplicate-hash grouping, T4 empty/single).
+- Parity: FlatSurfacesS C1 (traj 6920bc2b..., photo 26fa8137...), TunnelD pf4
+  C1 (traj a8ea08e0..., photo 591e1d18...), Shield1 C1 (traj e5921b4a..., photo
+  8b253d03...) - ALL bitwise identical to the pre-R1 references.
+- Performance (TunnelD): wall 1:37.88 vs 1:37.96; max RSS 147.5 vs 147.8 MB.
+- R1b (deterministic total-order hardening): NOT STARTED.

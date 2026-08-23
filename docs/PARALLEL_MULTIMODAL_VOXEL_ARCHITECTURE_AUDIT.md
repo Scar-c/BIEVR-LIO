@@ -359,6 +359,19 @@ clean architecture in stages, with the current Voxel layout as the baseline and
 8. memory: persistent voxel stays ~27 KB; transient association buffers become a
    reusable frame-local pool (section 10).
 
+## 19b. R1 implementation status (Phase 14, DONE)
+
+- Extracted `buildPointVoxelAssociations` + `sortPointVoxelAssociations`
+  (PointVoxelAssociation {hash, point_idx}) in
+  BIEVR/include/bievr_lio/point_voxel_association.h; migrated sampleInformed,
+  sampleIntensityPoints and findObservedVoxels; integratePoints DEFERRED
+  (different sort key (hash, x) + MapPoint metadata - changing it would alter
+  behavior).
+- Comparator/tie-break semantics unchanged; no new locks/atomics.
+- Bitwise parity confirmed on FlatSurfacesS C1, TunnelD pf4 C1 and Shield1 C1
+  (trajectory + photo.csv SHA identical); runtime/RSS unchanged.
+- R1b (total-order hardening): NOT STARTED.
+
 ## 20. Migration phases R1-R5
 
 **R1 - No-behavior-change infrastructure extraction** (single commit group):

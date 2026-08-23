@@ -1,3 +1,4 @@
+#include "bievr_lio/point_voxel_association.h"
 #include "bievr_lio/preprocess.h"
 
 #include "unordered_dense/unordered_dense.h"
@@ -10,11 +11,6 @@ struct VoxelDownsampleEntry {
   size_t hash;
   size_t idx;
   double dist;
-};
-
-struct VoxelHashIdx {
-  size_t hash;
-  size_t idx;
 };
 
 struct VoxelScore {
@@ -75,24 +71,13 @@ void sampleInformed(const BIEVRMap& map, const Transform& T_W_L, const Pointclou
   }
 
   // Lookup hash for each point based on its transformed position from the registration prior.
-  std::vector<VoxelHashIdx> voxel_entries(points_raw.size());
-  tbb::parallel_for(tbb::blocked_range<size_t>(0, points_raw.size()),
-                    [&](const tbb::blocked_range<size_t>& r) {
-                      for (size_t idx = r.begin(); idx != r.end(); ++idx) {
-                        Point p_w = T_W_L.linear() * points_raw[idx] + T_W_L.translation();
-                        voxel_entries[idx] = {map.hashIndex(p_w), idx};
-                      }
-                    });
-
-  tbb::parallel_sort(voxel_entries.begin(), voxel_entries.end(),
-                     [](const VoxelHashIdx& a, const VoxelHashIdx& b) {
-                       // Add tie to ensure deterministic order for points in the same voxel, even
-                       // if they have the same hash
-                       return std::tie(a.hash, a.idx) < std::tie(b.hash, b.idx);
-                     });
+  // Shared point->voxel association primitive (Phase-14 R1; identical semantics).
+  std::vector<bievr::PointVoxelAssociation> voxel_entries;
+  buildPointVoxelAssociations(map, points_raw, T_W_L, voxel_entries);
+  sortPointVoxelAssociations(voxel_entries);
 
   // Extract unique hashes of observed voxels
-  std::vector<VoxelHashIdx> unique_voxels;
+  std::vector<bievr::PointVoxelAssociation> unique_voxels;
   unique_voxels.reserve(points_raw.size());
   std::vector<bool> voxel_has_extras;
   voxel_has_extras.reserve(points_raw.size());
@@ -114,7 +99,7 @@ void sampleInformed(const BIEVRMap& map, const Transform& T_W_L, const Pointclou
                         auto voxel = map.getVoxel(entry.hash);
                         double score =
                             (!voxel || !voxel_has_extras[idx]) ? 0.0 : voxel->mean_img_dist_;
-                        voxel_scores[idx] = {score, entry.hash, entry.idx};
+                        voxel_scores[idx] = {score, entry.hash, entry.point_idx};
                       }
                     });
 
@@ -141,7 +126,7 @@ void sampleInformed(const BIEVRMap& map, const Transform& T_W_L, const Pointclou
       curr_informed = informed_voxels.contains(entry.hash);
     }
     if (curr_informed) {
-      informed_indices.push_back(entry.idx);
+      informed_indices.push_back(entry.point_idx);
     }
   }
 

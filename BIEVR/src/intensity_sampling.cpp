@@ -1,3 +1,4 @@
+#include "bievr_lio/point_voxel_association.h"
 #include "bievr_lio/intensity_sampling.h"
 
 #include <Eigen/Eigenvalues>
@@ -16,11 +17,6 @@ namespace bievr {
 
 namespace {
 
-struct VoxelHashIdx {
-  size_t hash;
-  size_t idx;
-};
-
 struct DownsampleEntry {
   size_t hash;
   size_t idx;
@@ -31,19 +27,10 @@ struct DownsampleEntry {
 
 std::vector<size_t> findObservedVoxels(const BIEVRMap& map, const Pointcloud& undistorted,
                                        const Transform& T_W_I_prior) {
-  std::vector<VoxelHashIdx> entries(undistorted.size());
-  tbb::parallel_for(tbb::blocked_range<size_t>(0, undistorted.size()),
-                    [&](const tbb::blocked_range<size_t>& r) {
-                      for (size_t i = r.begin(); i != r.end(); ++i) {
-                        const Point p_W = T_W_I_prior * undistorted[i];
-                        entries[i] = {map.hashIndex(p_W), i};
-                      }
-                    });
-
-  tbb::parallel_sort(entries.begin(), entries.end(),
-                     [](const VoxelHashIdx& a, const VoxelHashIdx& b) {
-                       return std::tie(a.hash, a.idx) < std::tie(b.hash, b.idx);
-                     });
+  // Shared point->voxel association primitive (Phase-14 R1; identical semantics).
+  std::vector<PointVoxelAssociation> entries;
+  buildPointVoxelAssociations(map, undistorted, T_W_I_prior, entries);
+  sortPointVoxelAssociations(entries);
 
   std::vector<size_t> observed;
   observed.reserve(entries.size());
@@ -181,33 +168,26 @@ IntensitySampleSet sampleIntensityPoints(const BIEVRMap& map, const Pointcloud& 
   IntensitySampleSet result;
   if (!config.enabled || undistorted.empty()) return result;
 
-  // Per-point world position + hash (single pass over the undistorted cloud).
-  // observed_flag is byte-addressable storage (NOT std::vector<bool>): the
-  // parallel workers write logically disjoint indices, but the bit-packed proxy
-  // would perform read-modify-write on shared storage words (data race / UB).
-  std::vector<VoxelHashIdx> entries(undistorted.size());
+  // Per-point world position + hash (single pass over the undistorted cloud),
+  // using the shared point->voxel association primitive (Phase-14 R1; identical
+  // hash / ordering semantics). observed_flag is byte-addressable storage (NOT
+  // std::vector<bool>): the parallel workers write logically disjoint indices,
+  // but the bit-packed proxy would perform read-modify-write on shared storage
+  // words (data race / UB).
+  std::vector<PointVoxelAssociation> entries;
+  buildPointVoxelAssociations(map, undistorted, T_W_I_prior, entries);
   std::vector<uint8_t> observed_flag(undistorted.size(), 0u);
-  tbb::parallel_for(tbb::blocked_range<size_t>(0, undistorted.size()),
-                    [&](const tbb::blocked_range<size_t>& r) {
-                      for (size_t i = r.begin(); i != r.end(); ++i) {
-                        const Point p_W = T_W_I_prior * undistorted[i];
-                        const size_t hash = map.hashIndex(p_W);
-                        entries[i] = {hash, i};
-                        observed_flag[i] = map.getVoxel(hash) != nullptr ? 1u : 0u;
-                      }
-                    });
-
-  // Unique observed voxel hashes.
-  tbb::parallel_sort(entries.begin(), entries.end(),
-                     [](const VoxelHashIdx& a, const VoxelHashIdx& b) {
-                       return std::tie(a.hash, a.idx) < std::tie(b.hash, b.idx);
-                     });
+  for (size_t i = 0; i < entries.size(); ++i) {
+    observed_flag[entries[i].point_idx] =
+        map.getVoxel(entries[i].hash) != nullptr ? 1u : 0u;
+  }
+  sortPointVoxelAssociations(entries);
 
   std::vector<size_t> observed_hashes;
   observed_hashes.reserve(entries.size());
   for (size_t i = 0; i < entries.size(); ++i) {
     if (i > 0 && entries[i].hash == entries[i - 1].hash) continue;
-    if (observed_flag[entries[i].idx]) observed_hashes.push_back(entries[i].hash);
+    if (observed_flag[entries[i].point_idx]) observed_hashes.push_back(entries[i].hash);
   }
   result.observed_voxels = observed_hashes.size();
   if (observed_hashes.empty()) return result;
@@ -238,7 +218,7 @@ IntensitySampleSet sampleIntensityPoints(const BIEVRMap& map, const Pointcloud& 
       curr_hash = entry.hash;
       curr_selected = selected_set.contains(entry.hash);
     }
-    if (curr_selected) candidate_indices.push_back(entry.idx);
+    if (curr_selected) candidate_indices.push_back(entry.point_idx);
   }
   Pointcloud candidates;
   candidates.resize(candidate_indices.size());
