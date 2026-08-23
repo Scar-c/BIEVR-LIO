@@ -59,12 +59,12 @@ int main() {
   bievr::BIEVRMap map1(mcfg);
   const bievr::Voxel* voxel1 = buildGradientVoxel(map1, alongX);
   if (!voxel1) return fail("voxel not built (pattern along X)");
-  const auto iotaX = voxel1->intensity_information_;
+  const auto iotaX = voxel1->intensity.intensity_information_;
 
   bievr::BIEVRMap map2(mcfg);
   const bievr::Voxel* voxel2 = buildGradientVoxel(map2, alongY);
   if (!voxel2) return fail("voxel not built (pattern along Y)");
-  const auto iotaY = voxel2->intensity_information_;
+  const auto iotaY = voxel2->intensity.intensity_information_;
 
   const bool iX_x = iotaX.x() > 1e-9, iX_y = iotaX.y() > 1e-9;
   const bool iY_x = iotaY.x() > 1e-9, iY_y = iotaY.y() > 1e-9;

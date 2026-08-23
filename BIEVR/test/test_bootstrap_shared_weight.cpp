@@ -53,10 +53,10 @@ CloudData makeCloud() {
 double intensityMean(const bievr::Voxel& v) {
   double sum = 0.0;
   size_t cnt = 0;
-  for (int y = 0; y < v.intensity_img_.rows(); ++y) {
-    for (int x = 0; x < v.intensity_img_.cols(); ++x) {
+  for (int y = 0; y < v.intensity.intensity_img_.rows(); ++y) {
+    for (int x = 0; x < v.intensity.intensity_img_.cols(); ++x) {
       if (v.bump_weights_(y, x) > 0.f) {
-        sum += v.intensity_img_(y, x);
+        sum += v.intensity.intensity_img_(y, x);
         ++cnt;
       }
     }
@@ -86,7 +86,7 @@ int main() {
     const bievr::Voxel* voxel = map.getVoxel(map.hashIndex(d.cloud[0]));
     if (!voxel) return fail("OFF bootstrap: voxel not observed");
     if (voxel->bump_weights_.sum() == 0.0f) return fail("OFF bootstrap: geometry not updated");
-    if (voxel->intensity_img_.rows() != 0) return fail("OFF bootstrap: intensity raster allocated");
+    if (voxel->intensity.intensity_img_.rows() != 0) return fail("OFF bootstrap: intensity raster allocated");
   }
 
   // --- Case B: intensity ON, fixed joint bootstrap (as tryInitMap) ---------

@@ -69,13 +69,13 @@ int main() {
   const bievr::Point p_O = voxel->T_C_W_ * cloud[4];
   const int x = static_cast<int>(std::round(p_O.x() / 0.05));
   const int y = static_cast<int>(std::round(p_O.y() / 0.05));
-  if (x < 0 || x >= voxel->bump_img_.cols() || y < 0 || y >= voxel->bump_img_.rows()) {
+  if (x < 0 || x >= voxel->height.bump_img_.cols() || y < 0 || y >= voxel->height.bump_img_.rows()) {
     return fail("test pixel out of image bounds");
   }
 
   const double w1 = 0.2, w2 = 0.1;
   if (!near(voxel->bump_weights_(y, x), w1 + w2, 1e-6)) return fail("pixel weight mismatch");
-  if (!near(voxel->intensity_img_(y, x), (w1 * 50 + w2 * 100) / (w1 + w2), 1e-3)) {
+  if (!near(voxel->intensity.intensity_img_(y, x), (w1 * 50 + w2 * 100) / (w1 + w2), 1e-3)) {
     return fail("weighted intensity average mismatch");
   }
   // Height must be updated with the exact same weight. The voxel local frame is
@@ -84,7 +84,7 @@ int main() {
   const bievr::Point p_O_A = voxel->T_C_W_ * cloud[4];
   const bievr::Point p_O_B = voxel->T_C_W_ * cloud[5];
   const double expect_H = (w1 * p_O_A(2) + w2 * p_O_B(2)) / (w1 + w2);
-  if (!near(voxel->bump_img_(y, x), expect_H, 1e-4)) return fail("weighted height mismatch");
+  if (!near(voxel->height.bump_img_(y, x), expect_H, 1e-4)) return fail("weighted height mismatch");
 
   return 0;
 }

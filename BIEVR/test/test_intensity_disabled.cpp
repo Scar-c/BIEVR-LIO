@@ -53,11 +53,11 @@ int main() {
 
   // Geometry is unaffected...
   if (voxel->bump_weights_.sum() == 0.0f) return fail("geometry update broken");
-  if (voxel->bump_img_.rows() == 0) return fail("height image missing");
+  if (voxel->height.bump_img_.rows() == 0) return fail("height image missing");
   // ...but no intensity raster is ever allocated...
-  if (voxel->intensity_img_.rows() != 0) return fail("intensity image allocated while disabled");
+  if (voxel->intensity.intensity_img_.rows() != 0) return fail("intensity image allocated while disabled");
   // ...and no intensity information is computed.
-  if (voxel->intensity_information_.norm() != 0.0) {
+  if (voxel->intensity.intensity_information_.norm() != 0.0) {
     return fail("intensity information computed while disabled");
   }
 

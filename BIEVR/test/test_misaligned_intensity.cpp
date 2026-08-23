@@ -52,7 +52,7 @@ int main() {
   // Geometry still updated...
   if (voxel->bump_weights_.sum() == 0.0f) return fail("geometry update broken");
   // ...but the intensity map must stay untouched (no 200.0 / no 0.0 injected).
-  if (voxel->intensity_img_.sum() != 0.0f) {
+  if (voxel->intensity.intensity_img_.sum() != 0.0f) {
     return fail("misaligned intensity contaminated the map");
   }
 

@@ -29,14 +29,14 @@ struct Cell {
 };
 
 void fillVoxel(bievr::Voxel& v, const Cell& c, int x0 = 1, int y0 = 1) {
-  v.intensity_img_.resize(4, 4);
+  v.intensity.intensity_img_.resize(4, 4);
   v.bump_weights_.resize(4, 4);
-  v.intensity_img_.setZero();
+  v.intensity.intensity_img_.setZero();
   v.bump_weights_.setZero();
-  v.intensity_img_(y0, x0) = c.I00;
-  v.intensity_img_(y0, x0 + 1) = c.I10;
-  v.intensity_img_(y0 + 1, x0) = c.I01;
-  v.intensity_img_(y0 + 1, x0 + 1) = c.I11;
+  v.intensity.intensity_img_(y0, x0) = c.I00;
+  v.intensity.intensity_img_(y0, x0 + 1) = c.I10;
+  v.intensity.intensity_img_(y0 + 1, x0) = c.I01;
+  v.intensity.intensity_img_(y0 + 1, x0 + 1) = c.I11;
   v.bump_weights_(y0, x0) = c.m00;
   v.bump_weights_(y0, x0 + 1) = c.m10;
   v.bump_weights_(y0 + 1, x0) = c.m01;
@@ -109,17 +109,17 @@ int main() {
       bievr::IntensitySample s;
       if (!sampleIntensityBilinearWithGradient(&v, 1.0 + a, 1.0 + b, s)) continue;
       // FD value-only at (a +/- eps)
-      const double v_px = refValue(Cell{1, 1, 1, 1, v.intensity_img_(1, 1), v.intensity_img_(1, 2),
-                                        v.intensity_img_(2, 1), v.intensity_img_(2, 2)},
+      const double v_px = refValue(Cell{1, 1, 1, 1, v.intensity.intensity_img_(1, 1), v.intensity.intensity_img_(1, 2),
+                                        v.intensity.intensity_img_(2, 1), v.intensity.intensity_img_(2, 2)},
                                    a + eps, b);
-      const double v_mx = refValue(Cell{1, 1, 1, 1, v.intensity_img_(1, 1), v.intensity_img_(1, 2),
-                                        v.intensity_img_(2, 1), v.intensity_img_(2, 2)},
+      const double v_mx = refValue(Cell{1, 1, 1, 1, v.intensity.intensity_img_(1, 1), v.intensity.intensity_img_(1, 2),
+                                        v.intensity.intensity_img_(2, 1), v.intensity.intensity_img_(2, 2)},
                                    a - eps, b);
-      const double v_py = refValue(Cell{1, 1, 1, 1, v.intensity_img_(1, 1), v.intensity_img_(1, 2),
-                                        v.intensity_img_(2, 1), v.intensity_img_(2, 2)},
+      const double v_py = refValue(Cell{1, 1, 1, 1, v.intensity.intensity_img_(1, 1), v.intensity.intensity_img_(1, 2),
+                                        v.intensity.intensity_img_(2, 1), v.intensity.intensity_img_(2, 2)},
                                    a, b + eps);
-      const double v_my = refValue(Cell{1, 1, 1, 1, v.intensity_img_(1, 1), v.intensity_img_(1, 2),
-                                        v.intensity_img_(2, 1), v.intensity_img_(2, 2)},
+      const double v_my = refValue(Cell{1, 1, 1, 1, v.intensity.intensity_img_(1, 1), v.intensity.intensity_img_(1, 2),
+                                        v.intensity.intensity_img_(2, 1), v.intensity.intensity_img_(2, 2)},
                                    a, b - eps);
       const double fd_x = (v_px - v_mx) / (2 * eps);
       const double fd_y = (v_py - v_my) / (2 * eps);
