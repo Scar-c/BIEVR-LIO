@@ -59,13 +59,13 @@ int main() {
   const auto s_pos = bievr::scoreIntensityVoxels(map, hashes, eta, "abs_components");
   const auto s_neg = bievr::scoreIntensityVoxels(map, hashes, -eta, "abs_components");
   if (s_pos.size() != 1 || s_neg.size() != 1) return fail("score lookup failed");
-  if (std::abs(s_pos[0].first - s_neg[0].first) > 1e-12) {
+  if (std::abs(s_pos[0].score - s_neg[0].score) > 1e-12) {
     return fail("abs_components score is not sign invariant");
   }
 
   const auto p_pos = bievr::scoreIntensityVoxels(map, hashes, eta, "paper_signed");
   const auto p_neg = bievr::scoreIntensityVoxels(map, hashes, -eta, "paper_signed");
-  if (std::abs(p_pos[0].first + p_neg[0].first) > 1e-9) {
+  if (std::abs(p_pos[0].score + p_neg[0].score) > 1e-9) {
     return fail("paper_signed mode should flip sign with -eta");
   }
 
