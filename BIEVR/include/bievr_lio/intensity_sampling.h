@@ -6,6 +6,7 @@
 
 #include "bievr_lio/bievr_map.h"
 #include "bievr_lio/common.h"
+#include "bievr_lio/scored_voxel_selection.h"
 
 // COIN-BIEVR intensity-voxel sampling (Sections 18-27 of the reproduction
 // plan). Given the current undistorted scan, the registration pose prior and
@@ -42,7 +43,7 @@ struct IntensitySampleSet {
   // Round-9 audit: the two smallest eigenvectors (world), and the raw Eq.8
   // candidate scores for all observed voxels (diagnostic only).
   Eigen::Vector3d weak_v1 = Eigen::Vector3d::Zero(), weak_v2 = Eigen::Vector3d::Zero();
-  std::vector<std::pair<double, size_t>> voxel_scores;
+  std::vector<ScoredVoxelCandidate> voxel_scores;
   std::vector<size_t> selected_voxel_hashes;
 };
 
@@ -65,12 +66,12 @@ Eigen::Vector3d estimateWeakGeometryDirection(const BIEVRMap& map,
 // intensity information vector. `score_mode` selects "abs_components" (default,
 // eigenvector-sign-agnostic, follows COIN-LIO's fabs style) or "paper_signed"
 // (literal signed dot product). Returns (score, hash) pairs, unsorted.
-std::vector<std::pair<double, size_t>> scoreIntensityVoxels(
+std::vector<ScoredVoxelCandidate> scoreIntensityVoxels(
     const BIEVRMap& map, const std::vector<size_t>& observed_hashes,
     const Eigen::Vector3d& eta_W, const std::string& score_mode = "abs_components");
 
 // Selects the `num_voxels` highest-scoring voxels (partial sort).
-std::vector<size_t> selectTopIntensityVoxels(const std::vector<std::pair<double, size_t>>& scores,
+std::vector<size_t> selectTopIntensityVoxels(const std::vector<ScoredVoxelCandidate>& scores,
                                              size_t num_voxels);
 
 // Full COIN-BIEVR intensity sampling: observed voxels -> eta -> top-N -> 0.1 m

@@ -387,6 +387,25 @@ Roadmap update: camera / VisualLayer extension is OUT OF CURRENT SCOPE. The
 current architecture target is geometry + LiDAR intensity only. The former
 R4/R5 visual phases are NOT PLANNED IN CURRENT ROADMAP.
 
+## 19d. R3 implementation status (Phase 16, DONE)
+
+Shared scored-candidate / selection infrastructure extracted
+(scored_voxel_selection.h): shared ScoredVoxelCandidate type (replaces the
+geometry VoxelScore and the intensity pair-based scores with identical values
+and field order), shared unique-voxel walk (collectUniqueVoxels over the R1
+association buffer, used by all three sampling-side walks), shared descending
+comparator (score > score, no tie-break) and the two selection primitives kept
+semantically distinct: sortScoredVoxelsDescending (geometry full sort: the
+sorted tail feeds the coarse set) and selectTopKScoredVoxels (intensity
+partial_sort top-K). Eq.8 kernel exposed as the pure shared function
+intensityDirectionalScore with unchanged math; MID stays path-local (field
+read + eligibility). No mega-candidate struct, no virtual machinery, no
+threading change. 26/26 tests PASS (added T1-T5 scorer/selection parity).
+
+CORE_ARCHITECTURE_REFACTOR_CLOSED: R1 (association) + R2 (ownership/lifecycle)
++ R3 (candidate/score/select) all complete. Further work is
+profiling-driven optimization only. Camera/LIVO: OUT OF SCOPE.
+
 Bitwise parity verified on FlatSurfacesS B0 (intensity-OFF), FlatSurfacesS C1,
 TunnelD pf4 C1 and Shield1 C1 (trajectory + photo.csv SHA identical);
 runtime/RSS unchanged.

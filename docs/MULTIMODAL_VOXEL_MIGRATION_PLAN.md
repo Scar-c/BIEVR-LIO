@@ -78,3 +78,31 @@ Regression gates (all phases):
 - Performance (TunnelD): wall 1:35.71 vs 1:37.88 (-1.3%), max RSS 145320 vs
   147452 KB (-1.4%); no regression.
 - R1b tie-break hardening: NOT STARTED.
+
+## R3 implementation status (Phase 16, DONE)
+
+- Shared candidate/score/select infrastructure (scored_voxel_selection.h):
+  ScoredVoxelCandidate {score, hash, point_idx} (replaces the geometry-local
+  VoxelScore and the intensity pair<double,size_t>; same field order and
+  values), UniqueVoxel + collectUniqueVoxels (shared unique-voxel walk over the
+  R1-sorted association buffer, used by sampleInformed, sampleIntensityPoints
+  and findObservedVoxels), scoredVoxelDescending (score > score, no tie-break),
+  sortScoredVoxelsDescending (geometry full sort - sorted tail feeds the
+  coarse set), selectTopKScoredVoxels (intensity partial_sort top-K) and the
+  pure Eq.8 kernel intensityDirectionalScore.
+- MID and Eq.8 remain two distinct scoring algorithms; scorer loops stay
+  path-specific (geometry parallel, intensity serial); threading unchanged.
+- No mega-candidate struct, no unused fields, no runtime polymorphism.
+- Diagnostics: intensity sampling voxel_scores now the shared candidate type
+  (mechanical .first/.second -> .score/.hash consumer updates only).
+- Tests: test_scored_voxel_selection T1-T5 (top-K parity, equal-score
+  current-behavior preservation, geometry/MID fixture, Eq.8 fixture incl.
+  full production path, K edge cases).
+- Bitwise parity: FlatSurfacesS B0 (dce52ea7...), C1 (6920bc2b.../26fa8137...),
+  TunnelD pf4 C1 (a8ea08e0.../591e1d18...), Shield1 C1 (e5921b4a.../8b253d03...).
+- Selection diagnostics identical (FlatS 818 rows / TunnelD 1186 rows, 12
+  diagnostic columns each). Performance (TunnelD): wall 1:39.26 vs 1:35.71
+  (+2.2%, load variance), RSS 144704 vs 145320 KB (-0.4%).
+- Roadmap: CORE_ARCHITECTURE_REFACTOR_CLOSED. Next: profiling-driven
+  optimization only. Camera/LIVO: OUT OF SCOPE. R1b tie-break hardening: only
+  if needed (NOT STARTED).

@@ -561,13 +561,13 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
       if (!intensity_samples.voxel_scores.empty()) {
         std::vector<double> cand, sel;
         cand.reserve(intensity_samples.voxel_scores.size());
-        for (const auto& s : intensity_samples.voxel_scores) cand.push_back(s.first);
+        for (const auto& s : intensity_samples.voxel_scores) cand.push_back(s.score);
         ankerl::unordered_dense::set<size_t> sel_set(
             intensity_samples.selected_voxel_hashes.begin(),
             intensity_samples.selected_voxel_hashes.end());
         sel.reserve(intensity_samples.selected_voxel_hashes.size());
         for (const auto& s : intensity_samples.voxel_scores) {
-          if (sel_set.contains(s.second)) sel.push_back(s.first);
+          if (sel_set.contains(s.hash)) sel.push_back(s.score);
         }
         diag.selected_score_p10 = quantile(sel, 0.10);
         diag.selected_score_p50 = quantile(sel, 0.50);

@@ -1,5 +1,6 @@
 #include "bievr_lio/point_voxel_association.h"
 #include "bievr_lio/preprocess.h"
+#include "bievr_lio/scored_voxel_selection.h"
 
 #include "unordered_dense/unordered_dense.h"
 
@@ -11,12 +12,6 @@ struct VoxelDownsampleEntry {
   size_t hash;
   size_t idx;
   double dist;
-};
-
-struct VoxelScore {
-  double score;
-  size_t hash;
-  size_t idx;
 };
 
 }  // namespace
@@ -76,36 +71,23 @@ void sampleInformed(const BIEVRMap& map, const Transform& T_W_L, const Pointclou
   buildPointVoxelAssociations(map, points_raw, T_W_L, voxel_entries);
   sortPointVoxelAssociations(voxel_entries);
 
-  // Extract unique hashes of observed voxels
-  std::vector<bievr::PointVoxelAssociation> unique_voxels;
-  unique_voxels.reserve(points_raw.size());
-  std::vector<bool> voxel_has_extras;
-  voxel_has_extras.reserve(points_raw.size());
+  // Extract unique hashes of observed voxels (shared candidate walk, Phase-16 R3).
+  const std::vector<bievr::UniqueVoxel> unique_voxels = bievr::collectUniqueVoxels(voxel_entries);
 
-  for (size_t i = 0; i < voxel_entries.size(); ++i) {
-    if (i == 0 || voxel_entries[i].hash != voxel_entries[i - 1].hash) {
-      unique_voxels.push_back(voxel_entries[i]);
-      voxel_has_extras.push_back(false);
-    } else {
-      voxel_has_extras.back() = true;
-    }
-  }
-
-  std::vector<VoxelScore> voxel_scores(unique_voxels.size());
+  std::vector<bievr::ScoredVoxelCandidate> voxel_scores(unique_voxels.size());
   tbb::parallel_for(tbb::blocked_range<size_t>(0, unique_voxels.size()),
                     [&](const tbb::blocked_range<size_t>& r) {
                       for (size_t idx = r.begin(); idx != r.end(); ++idx) {
-                        const auto& entry = unique_voxels[idx];
-                        auto voxel = map.getVoxel(entry.hash);
-                        double score =
-                            (!voxel || !voxel_has_extras[idx]) ? 0.0 : voxel->mean_img_dist_;
-                        voxel_scores[idx] = {score, entry.hash, entry.point_idx};
+                        const auto& uv = unique_voxels[idx];
+                        auto voxel = map.getVoxel(uv.hash);
+                        double score = (!voxel || uv.count < 2) ? 0.0 : voxel->mean_img_dist_;
+                        voxel_scores[idx] = {score, uv.hash, uv.point_idx};
                       }
                     });
 
-  // Sort by score, descending.
-  tbb::parallel_sort(voxel_scores.begin(), voxel_scores.end(),
-                     [](const VoxelScore& a, const VoxelScore& b) { return a.score > b.score; });
+  // Sort by score, descending (shared selection primitive; full sort because
+  // the sorted tail order feeds the coarse point set below).
+  bievr::sortScoredVoxelsDescending(voxel_scores);
 
   ankerl::unordered_dense::set<size_t> informed_voxels;
   size_t n_select = std::min(n_samples, voxel_scores.size());
@@ -145,7 +127,7 @@ void sampleInformed(const BIEVRMap& map, const Transform& T_W_L, const Pointclou
   tbb::parallel_for(tbb::blocked_range<size_t>(n_informed, voxel_scores.size()),
                     [&](const tbb::blocked_range<size_t>& r) {
                       for (size_t idx = r.begin(); idx != r.end(); ++idx) {
-                        points_coarse[idx - n_informed] = points_raw[voxel_scores[idx].idx];
+                        points_coarse[idx - n_informed] = points_raw[voxel_scores[idx].point_idx];
                       }
                     });
 }

@@ -1,5 +1,6 @@
 #include "bievr_lio/point_voxel_association.h"
 #include "bievr_lio/intensity_sampling.h"
+#include "bievr_lio/scored_voxel_selection.h"
 
 #include <Eigen/Eigenvalues>
 #include <algorithm>
@@ -32,11 +33,11 @@ std::vector<size_t> findObservedVoxels(const BIEVRMap& map, const Pointcloud& un
   buildPointVoxelAssociations(map, undistorted, T_W_I_prior, entries);
   sortPointVoxelAssociations(entries);
 
+  const auto unique = collectUniqueVoxels(entries);
   std::vector<size_t> observed;
-  observed.reserve(entries.size());
-  for (size_t i = 0; i < entries.size(); ++i) {
-    if (i > 0 && entries[i].hash == entries[i - 1].hash) continue;
-    if (map.getVoxel(entries[i].hash)) observed.push_back(entries[i].hash);
+  observed.reserve(unique.size());
+  for (const auto& uv : unique) {
+    if (map.getVoxel(uv.hash)) observed.push_back(uv.hash);
   }
   return observed;
 }
@@ -75,10 +76,10 @@ Eigen::Vector3d estimateWeakGeometryDirection(const BIEVRMap& map,
   return eta;
 }
 
-std::vector<std::pair<double, size_t>> scoreIntensityVoxels(
+std::vector<ScoredVoxelCandidate> scoreIntensityVoxels(
     const BIEVRMap& map, const std::vector<size_t>& observed_hashes, const Eigen::Vector3d& eta_W,
     const std::string& score_mode) {
-  std::vector<std::pair<double, size_t>> scores;
+  std::vector<ScoredVoxelCandidate> scores;
   scores.reserve(observed_hashes.size());
   const bool abs_components = (score_mode != "paper_signed");
   for (const size_t hash : observed_hashes) {
@@ -87,34 +88,23 @@ std::vector<std::pair<double, size_t>> scoreIntensityVoxels(
     // Map eta into the voxel-local frame and project onto its uv plane.
     const Eigen::Vector2d eta_uv = (voxel->T_C_W_.linear() * eta_W).head<2>();
     const Eigen::Vector2d& iota = voxel->intensity.intensity_information_;
-
-    double score;
-    if (abs_components) {
-      // COIN-BIEVR Eq. (8) is written as a signed dot product. We use
-      // component-wise absolute directional contribution to remove eigenvector
-      // sign ambiguity (v <-> -v), following the implementation style of
-      // COIN-LIO. The supplement does not specify the exact sign handling.
-      score = std::abs(eta_uv.x()) * iota.x() + std::abs(eta_uv.y()) * iota.y();
-    } else {
-      score = eta_uv.x() * iota.x() + eta_uv.y() * iota.y();
-    }
-    scores.emplace_back(score, hash);
+    // COIN-BIEVR Eq. (8): shared pure kernel with the production sign handling
+    // (abs_components for score_mode != "paper_signed").
+    scores.push_back({intensityDirectionalScore(eta_uv, iota, abs_components), hash, 0});
   }
   return scores;
 }
 
-std::vector<size_t> selectTopIntensityVoxels(const std::vector<std::pair<double, size_t>>& scores,
+std::vector<size_t> selectTopIntensityVoxels(const std::vector<ScoredVoxelCandidate>& scores,
                                              size_t num_voxels) {
   if (scores.empty()) return {};
 
-  std::vector<std::pair<double, size_t>> sorted = scores;
-  const size_t n_select = std::min(num_voxels, sorted.size());
-  std::partial_sort(sorted.begin(), sorted.begin() + static_cast<ptrdiff_t>(n_select), sorted.end(),
-                    [](const auto& a, const auto& b) { return a.first > b.first; });
+  std::vector<ScoredVoxelCandidate> sorted = scores;
+  selectTopKScoredVoxels(sorted, num_voxels);
 
   std::vector<size_t> selected;
-  selected.reserve(n_select);
-  for (size_t i = 0; i < n_select; ++i) selected.push_back(sorted[i].second);
+  selected.reserve(sorted.size());
+  for (const auto& c : sorted) selected.push_back(c.hash);
   return selected;
 }
 
@@ -176,18 +166,14 @@ IntensitySampleSet sampleIntensityPoints(const BIEVRMap& map, const Pointcloud& 
   // words (data race / UB).
   std::vector<PointVoxelAssociation> entries;
   buildPointVoxelAssociations(map, undistorted, T_W_I_prior, entries);
-  std::vector<uint8_t> observed_flag(undistorted.size(), 0u);
-  for (size_t i = 0; i < entries.size(); ++i) {
-    observed_flag[entries[i].point_idx] =
-        map.getVoxel(entries[i].hash) != nullptr ? 1u : 0u;
-  }
   sortPointVoxelAssociations(entries);
 
+  // Shared unique-voxel walk (Phase-16 R3); voxel-existence filter preserved.
+  const auto unique = collectUniqueVoxels(entries);
   std::vector<size_t> observed_hashes;
-  observed_hashes.reserve(entries.size());
-  for (size_t i = 0; i < entries.size(); ++i) {
-    if (i > 0 && entries[i].hash == entries[i - 1].hash) continue;
-    if (observed_flag[entries[i].point_idx]) observed_hashes.push_back(entries[i].hash);
+  observed_hashes.reserve(unique.size());
+  for (const auto& uv : unique) {
+    if (map.getVoxel(uv.hash)) observed_hashes.push_back(uv.hash);
   }
   result.observed_voxels = observed_hashes.size();
   if (observed_hashes.empty()) return result;
@@ -198,7 +184,7 @@ IntensitySampleSet sampleIntensityPoints(const BIEVRMap& map, const Pointcloud& 
                                                         &result.weak_eigenvalues, &V);
   result.weak_v1 = V.col(0);
   result.weak_v2 = V.col(1);
-  const std::vector<std::pair<double, size_t>> scores =
+  const std::vector<ScoredVoxelCandidate> scores =
       scoreIntensityVoxels(map, observed_hashes, result.weak_direction, config.score_mode);
   result.voxel_scores = scores;
   result.selected_voxel_hashes = selectTopIntensityVoxels(scores, config.num_voxels);
