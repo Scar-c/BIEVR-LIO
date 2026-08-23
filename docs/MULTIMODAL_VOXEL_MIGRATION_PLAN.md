@@ -56,3 +56,25 @@ Regression gates (all phases):
   8b253d03...) - ALL bitwise identical to the pre-R1 references.
 - Performance (TunnelD): wall 1:37.88 vs 1:37.96; max RSS 147.5 vs 147.8 MB.
 - R1b (deterministic total-order hardening): NOT STARTED.
+
+## R2 implementation status (Phase 15, DONE)
+
+- Voxel restructured: HeightLayer {bump_img_, bump_smoothed_} and IntensityLayer
+  {intensity_img_, intensity_information_} as explicit co-registered layer
+  structs; surface frame (T_C_W_/T_O_W_), shared weight mask (bump_weights_),
+  observed flag and geometry statistics remain at Voxel level. Pure member
+  relocation; matrix types/dims/initial values/allocation timing unchanged.
+- reprojectImage (single shared lifecycle) unchanged: height stays the 3D
+  lift/reference quantity; intensity rides along; weights move together.
+- intensity_information_ (Eq. 6) grouped into IntensityLayer (voxel-aggregate
+  [Ix, Iy] central-difference information, masked by shared weights).
+- Camera/VisualLayer: OUT OF CURRENT SCOPE (roadmap updated).
+- Tests: test_layer_ownership (T1 layer init incl. intensity-disabled no
+  allocation; T2 shared pixel correspondence; T3 reprojection alignment; T4
+  height-only path; T5 copy behavior).
+- Parity (all bitwise identical to references): FlatSurfacesS B0
+  (dce52ea7..., intensity-OFF), FlatSurfacesS C1 (6920bc2b.../26fa8137...),
+  TunnelD pf4 C1 (a8ea08e0.../591e1d18...), Shield1 C1 (e5921b4a.../8b253d03...).
+- Performance (TunnelD): wall 1:35.71 vs 1:37.88 (-1.3%), max RSS 145320 vs
+  147452 KB (-1.4%); no regression.
+- R1b tie-break hardening: NOT STARTED.

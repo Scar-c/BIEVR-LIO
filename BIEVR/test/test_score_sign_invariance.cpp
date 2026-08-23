@@ -51,7 +51,7 @@ int main() {
 
   const bievr::Voxel* voxel = map.getVoxel(map.hashIndex(cloud[0]));
   if (!voxel) return fail("voxel not observed");
-  if (voxel->intensity_information_.norm() < 1e-9) return fail("voxel has no intensity information");
+  if (voxel->intensity.intensity_information_.norm() < 1e-9) return fail("voxel has no intensity information");
 
   std::vector<size_t> hashes = {map.hashIndex(cloud[0])};
   const Eigen::Vector3d eta(1.0, 0.0, 0.0);

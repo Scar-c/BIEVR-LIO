@@ -23,23 +23,39 @@ struct MapPoint {
   float intensity = 0.0f;
 };
 
+// Co-registered geometric reference raster (BIEVR height/bump channel). The
+// surface frame (T_C_W_ / T_O_W_), the shared weight/validity mask
+// (bump_weights_) and the geometry statistics live at Voxel level: they are
+// shared by every raster layer of the voxel.
+struct HeightLayer {
+  Eigen::MatrixXf bump_img_;
+  Eigen::MatrixXf bump_smoothed_;
+};
+
+// COIN-BIEVR LiDAR radiometric layer, registered to the SAME surface frame and
+// pixel grid as HeightLayer (same dimensions, same bump_weights_ mask). It
+// rides along with the height surface during reprojection and never
+// participates in the 3D surface position.
+struct IntensityLayer {
+  // Voxel-wise intensity map (photometric channel).
+  Eigen::MatrixXf intensity_img_;
+  // Cached voxel-local intensity information vector iota = [Ix, Iy] (Eq. 6),
+  // computed from the intensity image masked by the shared weights.
+  Eigen::Vector2d intensity_information_ = Eigen::Vector2d::Zero();
+};
+
 struct Voxel {
   bool observed_{false};  // We consider a voxel observed if we have seen enough points inside it
   Transform T_C_W_ = Transform::Identity();
   Transform T_O_W_ = Transform::Identity();
 
-  // Geometry (BIEVR height/bump channel).
-  Eigen::MatrixXf bump_img_;
-  Eigen::MatrixXf bump_smoothed_;
+  // Height layer = geometric reference raster of the voxel surface.
+  HeightLayer height;
   // Shared observation weight: doubles as the validity mask for the height and
   // the intensity maps (COIN-BIEVR uses the same weighting for both, Eq. 4-5).
   Eigen::MatrixXf bump_weights_;
-
-  // COIN-BIEVR voxel-wise intensity map (photometric channel).
-  Eigen::MatrixXf intensity_img_;
-
-  // Cached voxel-local intensity information vector iota = [Ix, Iy] (Eq. 6).
-  Eigen::Vector2d intensity_information_ = Eigen::Vector2d::Zero();
+  // LiDAR intensity layer, co-registered to the same raster.
+  IntensityLayer intensity;
 
   M3 outer_sum_ = Eigen::Matrix3d::Zero();
   V3 sum_ = Eigen::Vector3d::Zero();
@@ -117,7 +133,7 @@ class BIEVRMap {
   void integratePoints(const std::vector<MapPoint>& points, Voxel& voxel, Eigen::MatrixXi& changed,
                        bool update_intensity);
 
-  // Recomputes voxel.intensity_information_ (Eq. 6) from the intensity image.
+  // Recomputes voxel.intensity.intensity_information_ (Eq. 6) from the intensity image.
   // Called for each voxel touched by a map update; never a full-map scan.
   void computeIntensityInformation(Voxel& voxel);
 

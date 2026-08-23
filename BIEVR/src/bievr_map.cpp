@@ -238,14 +238,14 @@ bool BIEVRMap::updateBumpImage(const std::vector<MapPoint>& points, Voxel& voxel
     ImageBounds bounds = computeImageSize(voxel, points[0].p_W);
     reprojectImage(voxel, bounds, changed);
   } else {
-    changed = Eigen::MatrixXi::Zero(voxel.bump_img_.rows(), voxel.bump_img_.cols());
+    changed = Eigen::MatrixXi::Zero(voxel.height.bump_img_.rows(), voxel.height.bump_img_.cols());
   }
 
   // Update the pixel values and weights based on the new points
   integratePoints(points, voxel, changed, update_intensity);
 
   Eigen::MatrixXi changed_dilated =
-      Eigen::MatrixXi::Zero(voxel.bump_img_.rows(), voxel.bump_img_.cols());
+      Eigen::MatrixXi::Zero(voxel.height.bump_img_.rows(), voxel.height.bump_img_.cols());
   if (normal_change) {
     changed_dilated = changed;
   } else {
@@ -254,10 +254,10 @@ bool BIEVRMap::updateBumpImage(const std::vector<MapPoint>& points, Voxel& voxel
   }
 
   if (config_.smooth) {
-    maskedGaussianSmooth(voxel.bump_img_, voxel.bump_weights_, changed_dilated,
-                         voxel.bump_smoothed_);
+    maskedGaussianSmooth(voxel.height.bump_img_, voxel.bump_weights_, changed_dilated,
+                         voxel.height.bump_smoothed_);
   } else {
-    voxel.bump_smoothed_ = voxel.bump_img_;
+    voxel.height.bump_smoothed_ = voxel.height.bump_img_;
   }
 
   computeScore(voxel);
@@ -284,24 +284,24 @@ BIEVRMap::ImageBounds BIEVRMap::computeImageSize(const Voxel& voxel,
 }
 
 void BIEVRMap::reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::MatrixXi& changed) {
-  Eigen::MatrixXf bump_original = voxel.bump_img_;
+  Eigen::MatrixXf bump_original = voxel.height.bump_img_;
   Eigen::MatrixXf weights_original = voxel.bump_weights_;
   // The intensity map shares the height map's resolution and lifecycle, but only
   // when the photometric channel is enabled for the map; otherwise the voxel
   // never allocates an intensity raster (original BIEVR path).
   const bool with_intensity = config_.intensity_enabled;
   Eigen::MatrixXf intensity_original;
-  if (with_intensity) intensity_original = voxel.intensity_img_;
+  if (with_intensity) intensity_original = voxel.intensity.intensity_img_;
   Transform T_W_C_o = voxel.T_C_W_.inverse();
-  voxel.bump_img_.resize(bounds.height, bounds.width);
-  voxel.bump_smoothed_.resize(bounds.height, bounds.width);
+  voxel.height.bump_img_.resize(bounds.height, bounds.width);
+  voxel.height.bump_smoothed_.resize(bounds.height, bounds.width);
   voxel.bump_weights_.resize(bounds.height, bounds.width);
-  if (with_intensity) voxel.intensity_img_.resize(bounds.height, bounds.width);
+  if (with_intensity) voxel.intensity.intensity_img_.resize(bounds.height, bounds.width);
   changed.resize(bounds.height, bounds.width);
-  voxel.bump_img_.setZero();
-  voxel.bump_smoothed_.setZero();
+  voxel.height.bump_img_.setZero();
+  voxel.height.bump_smoothed_.setZero();
   voxel.bump_weights_.setZero();
-  if (with_intensity) voxel.intensity_img_.setZero();
+  if (with_intensity) voxel.intensity.intensity_img_.setZero();
   changed.setZero();
   Point p_o_planar(bounds.u_min, bounds.v_min, 0.0);
   Point p_w_o = voxel.T_O_W_.inverse() * p_o_planar;
@@ -326,12 +326,12 @@ void BIEVRMap::reprojectImage(Voxel& voxel, const ImageBounds& bounds, Eigen::Ma
       int x = static_cast<int>(std::round(p_O(0) * inv_px_size_));
       int y = static_cast<int>(std::round(p_O(1) * inv_px_size_));
 
-      if (x < 0 || x >= voxel.bump_img_.cols() || y < 0 || y >= voxel.bump_img_.rows()) {
+      if (x < 0 || x >= voxel.height.bump_img_.cols() || y < 0 || y >= voxel.height.bump_img_.rows()) {
         continue;
       }
 
-      voxel.bump_img_(y, x) = p_O(2);
-      if (with_intensity) voxel.intensity_img_(y, x) = intensity_original(i, j);
+      voxel.height.bump_img_(y, x) = p_O(2);
+      if (with_intensity) voxel.intensity.intensity_img_(y, x) = intensity_original(i, j);
       voxel.bump_weights_(y, x) = weights_original(i, j);
       changed(y, x) = 1;
     }
@@ -346,17 +346,17 @@ void BIEVRMap::integratePoints(const std::vector<MapPoint>& points, Voxel& voxel
     int x = static_cast<int>(std::round(p_O(0) * inv_px_size_));
     int y = static_cast<int>(std::round(p_O(1) * inv_px_size_));
 
-    double mean_old = voxel.bump_img_(y, x);
+    double mean_old = voxel.height.bump_img_(y, x);
     double weight = voxel.bump_weights_(y, x);
     // Limit weighting so points close to the sensor don't get too powerful
     double weight_new = config_.weighted ? std::min(0.5, 1. / p.range) : 1.;
     const double denom = weight + weight_new;
     // Height and intensity are updated with the exact same pixel weight
     // (COIN-BIEVR Eq. 4-5).
-    voxel.bump_img_(y, x) = (mean_old * weight + weight_new * p_O(2)) / denom;
+    voxel.height.bump_img_(y, x) = (mean_old * weight + weight_new * p_O(2)) / denom;
     if (update_intensity) {
-      voxel.intensity_img_(y, x) =
-          (voxel.intensity_img_(y, x) * weight + weight_new * p.intensity) / denom;
+      voxel.intensity.intensity_img_(y, x) =
+          (voxel.intensity.intensity_img_(y, x) * weight + weight_new * p.intensity) / denom;
     }
     voxel.bump_weights_(y, x) = denom;
     changed(y, x) = 1;
@@ -364,10 +364,10 @@ void BIEVRMap::integratePoints(const std::vector<MapPoint>& points, Voxel& voxel
 }
 
 void BIEVRMap::computeIntensityInformation(Voxel& voxel) {
-  const int rows = voxel.intensity_img_.rows();
-  const int cols = voxel.intensity_img_.cols();
+  const int rows = voxel.intensity.intensity_img_.rows();
+  const int cols = voxel.intensity.intensity_img_.cols();
   if (rows < 3 || cols < 3) {
-    voxel.intensity_information_.setZero();
+    voxel.intensity.intensity_information_.setZero();
     return;
   }
 
@@ -376,14 +376,14 @@ void BIEVRMap::computeIntensityInformation(Voxel& voxel) {
   for (int y = 1; y < rows - 1; ++y) {
     for (int x = 1; x < cols - 1; ++x) {
       if (voxel.bump_weights_(y, x - 1) > 0 && voxel.bump_weights_(y, x + 1) > 0) {
-        Ix_sum += 0.5 * std::abs(voxel.intensity_img_(y, x + 1) - voxel.intensity_img_(y, x - 1));
+        Ix_sum += 0.5 * std::abs(voxel.intensity.intensity_img_(y, x + 1) - voxel.intensity.intensity_img_(y, x - 1));
       }
       if (voxel.bump_weights_(y - 1, x) > 0 && voxel.bump_weights_(y + 1, x) > 0) {
-        Iy_sum += 0.5 * std::abs(voxel.intensity_img_(y + 1, x) - voxel.intensity_img_(y - 1, x));
+        Iy_sum += 0.5 * std::abs(voxel.intensity.intensity_img_(y + 1, x) - voxel.intensity.intensity_img_(y - 1, x));
       }
     }
   }
-  voxel.intensity_information_ << Ix_sum, Iy_sum;
+  voxel.intensity.intensity_information_ << Ix_sum, Iy_sum;
 }
 
 void BIEVRMap::dilateMask(const Eigen::MatrixXi& changed, const Eigen::MatrixXf& weights,
@@ -448,11 +448,11 @@ void BIEVRMap::computeScore(Voxel& voxel) {
   int total_count = 0;
   double sum_img_dist = 0.0;
 
-  for (int i = 0; i < voxel.bump_img_.rows(); ++i) {
-    for (int j = 0; j < voxel.bump_img_.cols(); ++j) {
+  for (int i = 0; i < voxel.height.bump_img_.rows(); ++i) {
+    for (int j = 0; j < voxel.height.bump_img_.cols(); ++j) {
       if (voxel.bump_weights_(i, j) > 0) {
         total_count++;
-        double val = static_cast<double>(voxel.bump_smoothed_(i, j));
+        double val = static_cast<double>(voxel.height.bump_smoothed_(i, j));
         sum_img_dist += std::abs(val);
       }
     }

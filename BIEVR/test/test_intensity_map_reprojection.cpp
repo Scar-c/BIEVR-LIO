@@ -57,20 +57,20 @@ int main() {
   const bievr::Voxel* voxel = map.getVoxel(map.hashIndex(cloud1[0]));
   if (!voxel) return fail("voxel not observed after batch1");
   const Eigen::Matrix3d T_C_W_1 = voxel->T_C_W_.linear();
-  if (voxel->intensity_img_.rows() == 0 || voxel->bump_img_.rows() == 0) {
+  if (voxel->intensity.intensity_img_.rows() == 0 || voxel->height.bump_img_.rows() == 0) {
     return fail("images not created after batch1");
   }
-  if (voxel->intensity_img_.rows() != voxel->bump_img_.rows() ||
-      voxel->intensity_img_.cols() != voxel->bump_img_.cols()) {
+  if (voxel->intensity.intensity_img_.rows() != voxel->height.bump_img_.rows() ||
+      voxel->intensity.intensity_img_.cols() != voxel->height.bump_img_.cols()) {
     return fail("intensity and height images not same size after batch1");
   }
 
   // Checkerboard must be present in the intensity map.
   bool saw_dark = false, saw_bright = false;
-  for (int y = 0; y < voxel->intensity_img_.rows(); ++y) {
-    for (int x = 0; x < voxel->intensity_img_.cols(); ++x) {
+  for (int y = 0; y < voxel->intensity.intensity_img_.rows(); ++y) {
+    for (int x = 0; x < voxel->intensity.intensity_img_.cols(); ++x) {
       if (voxel->bump_weights_(y, x) <= 0.f) continue;
-      const float v = voxel->intensity_img_(y, x);
+      const float v = voxel->intensity.intensity_img_(y, x);
       if (v < 100.f) saw_dark = true;
       if (v >= 100.f) saw_bright = true;
     }
@@ -104,13 +104,13 @@ int main() {
   if (angleDeg(T_C_W_1, T_C_W_2) < 1.0) return fail("no reprojection triggered by batch2");
 
   // After reprojection the two maps must still be strictly co-registered.
-  if (voxel->intensity_img_.rows() != voxel->bump_img_.rows() ||
-      voxel->intensity_img_.cols() != voxel->bump_img_.cols()) {
+  if (voxel->intensity.intensity_img_.rows() != voxel->height.bump_img_.rows() ||
+      voxel->intensity.intensity_img_.cols() != voxel->height.bump_img_.cols()) {
     return fail("intensity/height size divergence after reprojection");
   }
   int valid_pixels = 0;
-  for (int y = 0; y < voxel->bump_img_.rows(); ++y) {
-    for (int x = 0; x < voxel->bump_img_.cols(); ++x) {
+  for (int y = 0; y < voxel->height.bump_img_.rows(); ++y) {
+    for (int x = 0; x < voxel->height.bump_img_.cols(); ++x) {
       if (voxel->bump_weights_(y, x) > 0.f) ++valid_pixels;
     }
   }

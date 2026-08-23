@@ -286,7 +286,7 @@ Both current scorers then share one candidate/group/select infrastructure
 (voxel-scored entries -> deterministic sort -> top-K) instead of the two
 independent samplers (`sampleInformed` and `sampleIntensityPoints`).
 
-## 15. Future camera layer (interface only, no residual)
+## 15. Future camera layer (interface only, no residual) [NOT CURRENT ROADMAP]
 
 - Single camera first; stereo is an optional future extension (never required by
   the voxel infrastructure).
@@ -371,6 +371,25 @@ clean architecture in stages, with the current Voxel layout as the baseline and
 - Bitwise parity confirmed on FlatSurfacesS C1, TunnelD pf4 C1 and Shield1 C1
   (trajectory + photo.csv SHA identical); runtime/RSS unchanged.
 - R1b (total-order hardening): NOT STARTED.
+
+## 19c. R2 implementation status (Phase 15, DONE)
+
+Voxel restructured with explicit co-registered layers: HeightLayer
+{bump_img_, bump_smoothed_} and IntensityLayer {intensity_img_,
+intensity_information_}; surface frame, shared bump_weights_ mask, observed
+flag and geometry statistics stay at Voxel level (one voxel, one authoritative
+surface frame, multiple co-registered LiDAR layers). Pure member relocation -
+matrix types, dimensions, initial values and allocation timing unchanged;
+reprojectImage still moves height + intensity + weights together with height
+as the 3D lift quantity.
+
+Roadmap update: camera / VisualLayer extension is OUT OF CURRENT SCOPE. The
+current architecture target is geometry + LiDAR intensity only. The former
+R4/R5 visual phases are NOT PLANNED IN CURRENT ROADMAP.
+
+Bitwise parity verified on FlatSurfacesS B0 (intensity-OFF), FlatSurfacesS C1,
+TunnelD pf4 C1 and Shield1 C1 (trajectory + photo.csv SHA identical);
+runtime/RSS unchanged.
 
 ## 20. Migration phases R1-R5
 

@@ -30,8 +30,8 @@ IntensityPointcloud buildIntensityMapCloud(const BIEVRMap& map, size_t max_voxel
   size_t voxels_used = 0;
   map.forEachVoxel([&](size_t /*hash*/, const Voxel& voxel) {
     if (voxels_used >= max_voxels) return;
-    const int rows = voxel.bump_img_.rows();
-    const int cols = voxel.bump_img_.cols();
+    const int rows = voxel.height.bump_img_.rows();
+    const int cols = voxel.height.bump_img_.cols();
     if (rows == 0 || cols == 0) return;
     ++voxels_used;
 
@@ -52,8 +52,8 @@ IntensityPointcloud buildIntensityMapCloud(const BIEVRMap& map, size_t max_voxel
       for (int x = 0; x < cols; ++x) {
         if (voxel.bump_weights_(y, x) <= 0.f) continue;
         points[k] = voxel.T_C_W_.inverse() *
-                    Point(x * px, y * px, voxel.bump_img_(y, x));
-        intensities(0, k) = voxel.intensity_img_(y, x);
+                    Point(x * px, y * px, voxel.height.bump_img_(y, x));
+        intensities(0, k) = voxel.intensity.intensity_img_(y, x);
         ++k;
       }
     }
@@ -469,7 +469,7 @@ void Pipeline::processFrame(const std::vector<ImuMeasurement>& imu_data,
     stats.intensity_sampling_ms = timing::Timing::GetMeanSeconds("04b_intensity_sampling") * 1e3;
     stats.intensity_map_voxels = 0;
     map_->forEachVoxel([&stats](size_t, const Voxel& v) {
-      if (v.intensity_img_.rows() > 0) ++stats.intensity_map_voxels;
+      if (v.intensity.intensity_img_.rows() > 0) ++stats.intensity_map_voxels;
     });
     // Low-overhead intensity preprocessing diagnostics (empty when disabled).
     stats.intensity_input_points = static_cast<int>(intensity_result.input_points);
@@ -812,7 +812,7 @@ void Pipeline::publishIntensityDebug(const Header& header, const Transform& T_W_
       const Voxel* v = map_->getVoxel(hash);
       if (!v || v->num_points_ == 0) continue;
       centroid_list.push_back(v->sum_ / static_cast<double>(v->num_points_));
-      value_list.push_back(v->intensity_information_.norm());
+      value_list.push_back(v->intensity.intensity_information_.norm());
     }
     if (!centroid_list.empty()) {
       Pointcloud centroids;

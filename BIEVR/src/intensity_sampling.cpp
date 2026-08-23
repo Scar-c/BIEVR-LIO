@@ -86,7 +86,7 @@ std::vector<std::pair<double, size_t>> scoreIntensityVoxels(
     if (!voxel) continue;
     // Map eta into the voxel-local frame and project onto its uv plane.
     const Eigen::Vector2d eta_uv = (voxel->T_C_W_.linear() * eta_W).head<2>();
-    const Eigen::Vector2d& iota = voxel->intensity_information_;
+    const Eigen::Vector2d& iota = voxel->intensity.intensity_information_;
 
     double score;
     if (abs_components) {

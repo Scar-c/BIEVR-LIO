@@ -322,12 +322,12 @@ inline bool sampleImageValueAndGradient(const Eigen::MatrixXf& image,
 }
 
 inline bool getSubPixelValue(const Voxel* voxel, const double x, const double y, double& value) {
-  return sampleImageValue(voxel->bump_smoothed_, voxel->bump_weights_, x, y, value);
+  return sampleImageValue(voxel->height.bump_smoothed_, voxel->bump_weights_, x, y, value);
 }
 
 inline bool getSubPixelIntensityValue(const Voxel* voxel, const double x, const double y,
                                       double& value) {
-  return sampleImageValue(voxel->intensity_img_, voxel->bump_weights_, x, y, value);
+  return sampleImageValue(voxel->intensity.intensity_img_, voxel->bump_weights_, x, y, value);
 }
 
 // Combined bilinear sample + central-difference gradient.
@@ -336,13 +336,13 @@ inline bool getSubPixelIntensityValue(const Voxel* voxel, const double x, const 
 // Gradients are set to 0 when their 4x2 stencil is out of bounds or has no valid corners.
 inline bool sampleValueAndGradient(const Voxel* voxel, const double x, const double y,
                                    double& value, double& dIdx, double& dIdy) {
-  return sampleImageValueAndGradient(voxel->bump_smoothed_, voxel->bump_weights_, x, y, value,
+  return sampleImageValueAndGradient(voxel->height.bump_smoothed_, voxel->bump_weights_, x, y, value,
                                      dIdx, dIdy);
 }
 
 inline bool sampleIntensityValueAndGradient(const Voxel* voxel, const double x, const double y,
                                             double& value, double& dIdx, double& dIdy) {
-  return sampleImageValueAndGradient(voxel->intensity_img_, voxel->bump_weights_, x, y, value,
+  return sampleImageValueAndGradient(voxel->intensity.intensity_img_, voxel->bump_weights_, x, y, value,
                                      dIdx, dIdy);
 }
 
@@ -374,8 +374,8 @@ inline bool sampleIntensityBilinearWithGradient(const Voxel* voxel, double x, do
   const int y0 = std::floor(y);
   const int x1 = x0 + 1;
   const int y1 = y0 + 1;
-  const int max_x = voxel->intensity_img_.cols() - 1;
-  const int max_y = voxel->intensity_img_.rows() - 1;
+  const int max_x = voxel->intensity.intensity_img_.cols() - 1;
+  const int max_y = voxel->intensity.intensity_img_.rows() - 1;
   if (x0 < 0 || y0 < 0 || x1 > max_x || y1 > max_y) return false;
 
   const double a = x - x0;
@@ -385,7 +385,7 @@ inline bool sampleIntensityBilinearWithGradient(const Voxel* voxel, double x, do
 
   // Validity comes from the shared voxel weight (bump_weights_ > 0). A valid
   // intensity value of exactly 0 is still a valid measurement.
-  const auto& I = voxel->intensity_img_;
+  const auto& I = voxel->intensity.intensity_img_;
   const auto& W = voxel->bump_weights_;
   const double m00 = W(y0, x0) > 0 ? 1.0 : 0.0;
   const double m10 = W(y0, x1) > 0 ? 1.0 : 0.0;
