@@ -1,0 +1,64 @@
+map:
+  pixel_size_m: 0.05 # Pixel side length [m]
+  voxel_size_m: 0.5 # Voxel side length [m]
+  normal_tolerance_deg: 3 # Normal change threshold to trigger reprojection of voxel image [°]
+  smooth: True # Apply smoothing to the voxel image
+  weighted: True # Weighted pixel update
+  max_size: 1500000 # Maximum number of voxels to keep in the map
+  frame: "odom"
+
+preprocess:
+  downsample_resolution_m: 0.1 # Downsample points to this resolution [m]. In case of informed sampling, this
+  # corresponds to the high resolution voxels
+  informed_sampling: True
+
+optimization:
+  huber_delta: 0.1 # Huber norm threshold
+
+# COIN-BIEVR intensity channel. This default config is the BIEVR-safe baseline:
+# the master switch is OFF, so geometry/map/sampling/LM follow the original
+# BIEVR-LIO exactly (no intensity preprocessing, no intensity map, no photo LM).
+# To run COIN-BIEVR use config/params_coin_bievr.yaml (or override enabled: True).
+intensity:
+  enabled: False # Master switch. False = original BIEVR behaviour.
+
+  preprocessing:
+    enabled: True
+    projection: "spherical" # "spherical" (Eq. 1); "ouster_lut" needs a factory LUT
+    image_width: 1024 # TBD per sensor
+    image_height: 64 # TBD per sensor
+    vertical_fov_deg: 50.0 # TBD per sensor
+    brightness_window_u: 0 # 0 = full image width
+    brightness_window_v: 0 # 0 = full image height
+    normalization_scale: 140.0 # s in I_F = s*I/(I_B+1)
+    remove_lines: False # Ouster line-artifact removal (enable in Ouster sensor yaml)
+    gaussian_blur: False
+    raw_intensity_scale: 1.0
+    use_ouster_lut: False
+
+  sampling:
+    enabled: True
+    num_voxels: 100 # N_intensity_voxel (paper)
+    downsample_resolution_m: 0.1 # intensity point downsampling (paper)
+    weak_eigen_ratio: 10.0 # eta switch 10*lambda1 > lambda2 (paper)
+    normalize_eta: True # TBD (paper does not specify)
+    score_mode: "abs_components" # Eq.8 sign handling; "abs_components" (default) or "paper_signed"
+
+  optimization:
+    enabled: True
+    photometric_scale: 0.02 # lambda; TBD (paper does not give a value)
+
+imu:  
+    window_s: 10 # Time window for the inertial optimization [s]
+    t_init: 0.2 # Time to initialize bias and gravity [s]
+    frame: "imu"
+
+debug:
+  publish_all_clouds: False # Publish all clouds (fine, coarse, deskewed)
+  timing: True
+  log: False
+  dashboard: False
+  dashboard_ascii_path: "" # ASCII art for the dashboard. Empty = bievr_ascii.txt next to the config.
+  trajectory_path: "/home/lc/algorithm_versa/src/BIEVR-LIO/results/round16_r3_parity/flatsurfaces_b0/trajectory.tum"
+
+max_num_threads: 0 # 0 = automatic, >0 = number of threads to use for parallel processing
